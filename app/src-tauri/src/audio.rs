@@ -26,14 +26,14 @@ fn play_sound_blocking(
     // rodio 0.21 uses OutputStreamBuilder instead of OutputStream::try_default()
     let stream = OutputStreamBuilder::open_default_stream()?;
 
-    let (frequency, duration_ms) = match sound_type {
-        SoundType::RecordingStart => (880.0, 100), // A5 note, short beep
-        SoundType::RecordingStop => (440.0, 150),  // A4 note, slightly longer
+    let duration_ms = match sound_type {
+        SoundType::RecordingStart => 120, // Bright tambourine shake
+        SoundType::RecordingStop => 180,  // Slightly longer, lower shake
     };
 
-    let source = SineWave::new(frequency)
+    let source = TambourineSound::new(sound_type)
         .take_duration(Duration::from_millis(duration_ms))
-        .amplify(0.3); // Reduce volume to 30%
+        .amplify(0.35);
 
     // rodio 0.21 uses mixer().add() instead of play_raw()
     stream.mixer().add(source);
@@ -44,36 +44,110 @@ fn play_sound_blocking(
     Ok(())
 }
 
-/// A simple sine wave source for generating beep tones
-struct SineWave {
-    frequency: f32,
+/// A tambourine-like sound source combining metallic jingles with noise
+struct TambourineSound {
     sample_rate: u32,
     sample_index: u64,
+    /// Linear feedback shift register for noise generation
+    noise_state: u32,
+    /// Frequencies for the metallic jingle harmonics
+    jingle_frequencies: Vec<f32>,
+    /// Whether this is a start or stop sound
+    is_start_sound: bool,
 }
 
-impl SineWave {
-    fn new(frequency: f32) -> Self {
+impl TambourineSound {
+    fn new(sound_type: SoundType) -> Self {
+        let is_start_sound = matches!(sound_type, SoundType::RecordingStart);
+
+        // Tambourine jingles have multiple metallic frequencies
+        // Higher frequencies for start (brighter), lower for stop
+        let jingle_frequencies = if is_start_sound {
+            // Bright, ascending jingle frequencies
+            vec![2200.0, 3100.0, 4400.0, 5500.0, 6800.0]
+        } else {
+            // Slightly lower, descending feel
+            vec![1800.0, 2600.0, 3600.0, 4800.0, 5200.0]
+        };
+
         Self {
-            frequency,
             sample_rate: 44100,
             sample_index: 0,
+            noise_state: 0xACE1u32, // Seed for noise generator
+            jingle_frequencies,
+            is_start_sound,
+        }
+    }
+
+    /// Generate pseudo-random noise using LFSR
+    fn next_noise(&mut self) -> f32 {
+        // Linear feedback shift register for white noise
+        let bit = (self.noise_state
+            ^ (self.noise_state >> 2)
+            ^ (self.noise_state >> 3)
+            ^ (self.noise_state >> 5))
+            & 1;
+        self.noise_state = (self.noise_state >> 1) | (bit << 15);
+        // Convert to -1.0 to 1.0 range
+        (self.noise_state as f32 / 32768.0) - 1.0
+    }
+
+    /// Calculate envelope value (fast attack, medium decay)
+    fn envelope(&self, time_seconds: f32, duration_seconds: f32) -> f32 {
+        let attack_time = 0.005; // 5ms attack
+
+        if time_seconds < attack_time {
+            // Fast attack
+            time_seconds / attack_time
+        } else {
+            // Exponential decay
+            let decay_progress = (time_seconds - attack_time) / (duration_seconds - attack_time);
+            (-decay_progress * 4.0).exp()
         }
     }
 }
 
-impl Iterator for SineWave {
+impl Iterator for TambourineSound {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let value = (2.0 * std::f32::consts::PI * self.frequency * self.sample_index as f32
-            / self.sample_rate as f32)
-            .sin();
+        let time = self.sample_index as f32 / self.sample_rate as f32;
+        let duration = if self.is_start_sound { 0.12 } else { 0.18 };
+
+        // Calculate envelope
+        let env = self.envelope(time, duration);
+
+        // Mix multiple jingle frequencies (metallic harmonics)
+        let mut jingle_sum = 0.0f32;
+        for (index, &freq) in self.jingle_frequencies.iter().enumerate() {
+            // Add slight detuning for more realistic jingle sound
+            let detune = 1.0 + (index as f32 * 0.002);
+            let phase = 2.0 * std::f32::consts::PI * freq * detune * time;
+
+            // Each harmonic has different amplitude (higher harmonics quieter)
+            let harmonic_amp = 1.0 / (1.0 + index as f32 * 0.3);
+            jingle_sum += phase.sin() * harmonic_amp;
+        }
+
+        // Normalize jingle sum
+        jingle_sum /= self.jingle_frequencies.len() as f32;
+
+        // Generate filtered noise (tambourine "shimmer")
+        let noise = self.next_noise();
+
+        // High-pass filtered noise mixed with jingles
+        // More noise for start (shaker feel), more tone for stop
+        let noise_mix = if self.is_start_sound { 0.5 } else { 0.35 };
+        let jingle_mix = 1.0 - noise_mix;
+
+        let sample = env * (jingle_sum * jingle_mix + noise * noise_mix);
+
         self.sample_index = self.sample_index.wrapping_add(1);
-        Some(value)
+        Some(sample)
     }
 }
 
-impl Source for SineWave {
+impl Source for TambourineSound {
     fn current_span_len(&self) -> Option<usize> {
         None
     }
