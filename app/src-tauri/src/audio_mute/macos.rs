@@ -1,14 +1,14 @@
-//! macOS audio control implementation using CoreAudio.
+//! macOS audio mute control implementation using CoreAudio.
 //!
 //! Uses the CoreAudio framework to control the default audio output device's
-//! volume and mute state via AudioObject property APIs.
+//! mute state via AudioObject property APIs.
 
 use super::{AudioControlError, SystemAudioControl};
 use objc2_core_audio::{
-    kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput, kAudioDevicePropertyVolumeScalar,
+    kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput,
     kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyElementMain,
     kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, AudioObjectGetPropertyData,
-    AudioObjectGetPropertyDataSize, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
+    AudioObjectPropertyAddress, AudioObjectSetPropertyData,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -44,7 +44,7 @@ impl MacOSAudioController {
 
         let status = unsafe {
             AudioObjectGetPropertyData(
-                kAudioObjectSystemObject,
+                kAudioObjectSystemObject as u32,
                 NonNull::new(&address as *const _ as *mut _).unwrap(),
                 0,
                 std::ptr::null(),
@@ -67,69 +67,6 @@ impl MacOSAudioController {
         }
 
         Ok(device_id)
-    }
-
-    /// Get a float property from the default output device (channel 0 = master).
-    fn get_float_property(&self, selector: u32) -> Result<f32, AudioControlError> {
-        let address = AudioObjectPropertyAddress {
-            mSelector: selector,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain, // Channel 0 = master
-        };
-
-        let mut value: f32 = 0.0;
-        let mut size = std::mem::size_of::<f32>() as u32;
-
-        let status = unsafe {
-            AudioObjectGetPropertyData(
-                self.device_id,
-                NonNull::new(&address as *const _ as *mut _).unwrap(),
-                0,
-                std::ptr::null(),
-                NonNull::new(&mut size as *mut _).unwrap(),
-                NonNull::new(&mut value as *mut _ as *mut c_void).unwrap(),
-            )
-        };
-
-        if status != 0 {
-            return Err(AudioControlError::GetPropertyFailed(format!(
-                "OSStatus: {}",
-                status
-            )));
-        }
-
-        Ok(value)
-    }
-
-    /// Set a float property on the default output device (channel 0 = master).
-    fn set_float_property(&self, selector: u32, value: f32) -> Result<(), AudioControlError> {
-        let address = AudioObjectPropertyAddress {
-            mSelector: selector,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain, // Channel 0 = master
-        };
-
-        let size = std::mem::size_of::<f32>() as u32;
-
-        let status = unsafe {
-            AudioObjectSetPropertyData(
-                self.device_id,
-                NonNull::new(&address as *const _ as *mut _).unwrap(),
-                0,
-                std::ptr::null(),
-                size,
-                NonNull::new(&value as *const _ as *mut c_void).unwrap(),
-            )
-        };
-
-        if status != 0 {
-            return Err(AudioControlError::SetPropertyFailed(format!(
-                "OSStatus: {}",
-                status
-            )));
-        }
-
-        Ok(())
     }
 
     /// Get a u32 property from the default output device.
@@ -197,15 +134,6 @@ impl MacOSAudioController {
 }
 
 impl SystemAudioControl for MacOSAudioController {
-    fn get_volume(&self) -> Result<f32, AudioControlError> {
-        self.get_float_property(kAudioDevicePropertyVolumeScalar)
-    }
-
-    fn set_volume(&self, level: f32) -> Result<(), AudioControlError> {
-        let level = level.clamp(0.0, 1.0);
-        self.set_float_property(kAudioDevicePropertyVolumeScalar, level)
-    }
-
     fn is_muted(&self) -> Result<bool, AudioControlError> {
         self.get_u32_property(kAudioDevicePropertyMute)
             .map(|v| v != 0)

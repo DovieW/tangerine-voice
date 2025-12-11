@@ -4,6 +4,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
+use tauri_utils::config::BackgroundThrottlingPolicy;
 
 mod audio;
 mod audio_mute;
@@ -17,11 +18,25 @@ mod tests;
 
 use audio_mute::AudioMuteManager;
 use history::HistoryStorage;
-use settings::{AppSettings, HotkeyConfig, SettingsManager};
+use settings::HotkeyConfig;
 use state::AppState;
 
 #[cfg(desktop)]
+use tauri_plugin_store::StoreExt;
+
+#[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent, ShortcutState};
+
+// Define NSPanel type for overlay on macOS
+#[cfg(target_os = "macos")]
+tauri_nspanel::tauri_panel! {
+    panel!(OverlayPanel {
+        config: {
+            can_become_key_window: false,
+            is_floating_panel: true
+        }
+    })
+}
 
 /// Normalize a shortcut string for comparison (handles "ctrl" vs "control" differences)
 #[cfg(desktop)]
@@ -33,67 +48,117 @@ pub(crate) fn normalize_shortcut_string(s: &str) -> String {
         .replace("win", "super")
 }
 
+/// Helper to read a setting from the store with a default fallback
+#[cfg(desktop)]
+fn get_setting_from_store<T: serde::de::DeserializeOwned>(
+    app: &AppHandle,
+    key: &str,
+    default: T,
+) -> T {
+    app.store("settings.json")
+        .ok()
+        .and_then(|store| store.get(key))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default)
+}
+
+/// Start recording with sound and audio mute handling
+#[cfg(desktop)]
+fn start_recording(
+    app: &AppHandle,
+    state: &AppState,
+    sound_enabled: bool,
+    audio_mute_manager: &Option<tauri::State<'_, AudioMuteManager>>,
+    auto_mute_audio: bool,
+    source: &str,
+) {
+    state.is_recording.store(true, Ordering::SeqCst);
+    log::info!("{}: starting recording", source);
+    // Play sound BEFORE muting so it's audible
+    if sound_enabled {
+        audio::play_sound(audio::SoundType::RecordingStart);
+        // Brief delay to let sound play before muting
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    // Mute system audio if enabled
+    if auto_mute_audio {
+        if let Some(manager) = audio_mute_manager {
+            if let Err(e) = manager.mute() {
+                log::warn!("Failed to mute audio: {}", e);
+            }
+        }
+    }
+    let _ = app.emit("recording-start", ());
+}
+
+/// Stop recording with sound and audio unmute handling
+#[cfg(desktop)]
+fn stop_recording(
+    app: &AppHandle,
+    state: &AppState,
+    sound_enabled: bool,
+    audio_mute_manager: &Option<tauri::State<'_, AudioMuteManager>>,
+    auto_mute_audio: bool,
+    source: &str,
+) {
+    state.is_recording.store(false, Ordering::SeqCst);
+    log::info!("{}: stopping recording", source);
+    // Unmute system audio if it was muted
+    if auto_mute_audio {
+        if let Some(manager) = audio_mute_manager {
+            if let Err(e) = manager.unmute() {
+                log::warn!("Failed to unmute audio: {}", e);
+            }
+        }
+    }
+    if sound_enabled {
+        audio::play_sound(audio::SoundType::RecordingStop);
+    }
+    let _ = app.emit("recording-stop", ());
+}
+
 /// Handle a shortcut event - public so it can be called from commands/settings.rs
 #[cfg(desktop)]
 pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &ShortcutEvent) {
     let state = app.state::<AppState>();
-    let settings_manager = app.state::<SettingsManager>();
 
-    // Get current settings
-    let settings = settings_manager.get().ok();
-    let sound_enabled = settings.as_ref().map(|s| s.sound_enabled).unwrap_or(true);
-    let auto_mute_audio = settings
-        .as_ref()
-        .map(|s| s.auto_mute_audio)
-        .unwrap_or(false);
+    // Get current settings from store
+    let sound_enabled: bool = get_setting_from_store(app, "sound_enabled", true);
+    let auto_mute_audio: bool = get_setting_from_store(app, "auto_mute_audio", false);
 
     // Get shortcut string for comparison (normalized to handle "ctrl" vs "control" differences)
     let shortcut_str = normalize_shortcut_string(&shortcut.to_string());
 
-    // Get configured shortcut strings from settings (normalized)
+    // Get configured shortcut strings from store (normalized), with validation fallback
+    let toggle_hotkey: HotkeyConfig =
+        get_setting_from_store(app, "toggle_hotkey", HotkeyConfig::default_toggle());
+    let hold_hotkey: HotkeyConfig =
+        get_setting_from_store(app, "hold_hotkey", HotkeyConfig::default_hold());
+    let paste_last_hotkey: HotkeyConfig =
+        get_setting_from_store(app, "paste_last_hotkey", HotkeyConfig::default_paste_last());
+
+    // Validate hotkeys - if they can't be parsed as shortcuts, use defaults
     let toggle_shortcut_str = normalize_shortcut_string(
-        &settings
-            .as_ref()
-            .map(|s| s.toggle_hotkey.to_shortcut_string())
-            .unwrap_or_else(|| HotkeyConfig::default_toggle().to_shortcut_string()),
+        &toggle_hotkey
+            .to_shortcut()
+            .map(|_| toggle_hotkey.to_shortcut_string())
+            .unwrap_or_else(|_| HotkeyConfig::default_toggle().to_shortcut_string()),
     );
     let hold_shortcut_str = normalize_shortcut_string(
-        &settings
-            .as_ref()
-            .map(|s| s.hold_hotkey.to_shortcut_string())
-            .unwrap_or_else(|| HotkeyConfig::default_hold().to_shortcut_string()),
+        &hold_hotkey
+            .to_shortcut()
+            .map(|_| hold_hotkey.to_shortcut_string())
+            .unwrap_or_else(|_| HotkeyConfig::default_hold().to_shortcut_string()),
     );
     let paste_last_shortcut_str = normalize_shortcut_string(
-        &settings
-            .as_ref()
-            .map(|s| s.paste_last_hotkey.to_shortcut_string())
-            .unwrap_or_else(|| HotkeyConfig::default_paste_last().to_shortcut_string()),
+        &paste_last_hotkey
+            .to_shortcut()
+            .map(|_| paste_last_hotkey.to_shortcut_string())
+            .unwrap_or_else(|_| HotkeyConfig::default_paste_last().to_shortcut_string()),
     );
 
     // Get audio mute manager if available
     let audio_mute_manager = app.try_state::<AudioMuteManager>();
-
-    // Helper to mute audio
-    let mute_audio = || {
-        if auto_mute_audio {
-            if let Some(manager) = &audio_mute_manager {
-                if let Err(e) = manager.mute() {
-                    log::warn!("Failed to mute audio: {}", e);
-                }
-            }
-        }
-    };
-
-    // Helper to unmute audio
-    let unmute_audio = || {
-        if auto_mute_audio {
-            if let Some(manager) = &audio_mute_manager {
-                if let Err(e) = manager.unmute() {
-                    log::warn!("Failed to unmute audio: {}", e);
-                }
-            }
-        }
-    };
 
     // Compare normalized strings directly
     let is_toggle = shortcut_str == toggle_shortcut_str;
@@ -101,62 +166,60 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
     let is_paste_last = shortcut_str == paste_last_shortcut_str;
 
     if is_toggle {
-        // Toggle mode: only respond to Pressed, ignore Released
-        if matches!(event.state, ShortcutState::Pressed) {
-            let is_recording = state.is_recording.load(Ordering::SeqCst);
-
-            if is_recording {
-                // Stop recording
-                state.is_recording.store(false, Ordering::SeqCst);
-                log::info!("Toggle: stopping recording");
-                unmute_audio();
-                if sound_enabled {
-                    audio::play_sound(audio::SoundType::RecordingStop);
+        // Toggle mode: action happens on key release (debounced)
+        match event.state {
+            ShortcutState::Pressed => {
+                state.toggle_key_held.swap(true, Ordering::SeqCst);
+            }
+            ShortcutState::Released => {
+                if state.toggle_key_held.swap(false, Ordering::SeqCst) {
+                    if state.is_recording.load(Ordering::SeqCst) {
+                        stop_recording(
+                            app,
+                            &state,
+                            sound_enabled,
+                            &audio_mute_manager,
+                            auto_mute_audio,
+                            "Toggle",
+                        );
+                    } else {
+                        start_recording(
+                            app,
+                            &state,
+                            sound_enabled,
+                            &audio_mute_manager,
+                            auto_mute_audio,
+                            "Toggle",
+                        );
+                    }
                 }
-                let _ = app.emit("recording-stop", ());
-            } else {
-                // Start recording
-                state.is_recording.store(true, Ordering::SeqCst);
-                log::info!("Toggle: starting recording");
-                // Play sound BEFORE muting so it's audible
-                if sound_enabled {
-                    audio::play_sound(audio::SoundType::RecordingStart);
-                    // Brief delay to let sound play before muting
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                }
-                mute_audio();
-                let _ = app.emit("recording-start", ());
             }
         }
     } else if is_hold {
-        // Hold-to-Record: respond to both Pressed and Released
+        // Hold-to-Record: start on press, stop on release
         match event.state {
             ShortcutState::Pressed => {
-                // Use swap to detect first press vs OS key repeat
                 if !state.ptt_key_held.swap(true, Ordering::SeqCst) {
-                    // First press - start recording
-                    state.is_recording.store(true, Ordering::SeqCst);
-                    log::info!("Hold: starting recording");
-                    // Play sound BEFORE muting so it's audible
-                    if sound_enabled {
-                        audio::play_sound(audio::SoundType::RecordingStart);
-                        // Brief delay to let sound play before muting
-                        std::thread::sleep(std::time::Duration::from_millis(150));
-                    }
-                    mute_audio();
-                    let _ = app.emit("recording-start", ());
+                    start_recording(
+                        app,
+                        &state,
+                        sound_enabled,
+                        &audio_mute_manager,
+                        auto_mute_audio,
+                        "Hold",
+                    );
                 }
             }
             ShortcutState::Released => {
                 if state.ptt_key_held.swap(false, Ordering::SeqCst) {
-                    // Key released - stop recording
-                    state.is_recording.store(false, Ordering::SeqCst);
-                    log::info!("Hold: stopping recording");
-                    unmute_audio();
-                    if sound_enabled {
-                        audio::play_sound(audio::SoundType::RecordingStop);
-                    }
-                    let _ = app.emit("recording-stop", ());
+                    stop_recording(
+                        app,
+                        &state,
+                        sound_enabled,
+                        &audio_mute_manager,
+                        auto_mute_audio,
+                        "Hold",
+                    );
                 }
             }
         }
@@ -190,21 +253,52 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
     }
 }
 
-/// Load settings from the default app data directory (used before SettingsManager is available)
+/// Initial settings for shortcut registration (before store plugin is available)
 #[cfg(desktop)]
-fn load_initial_settings() -> AppSettings {
+struct InitialShortcutSettings {
+    toggle_hotkey: HotkeyConfig,
+    hold_hotkey: HotkeyConfig,
+    paste_last_hotkey: HotkeyConfig,
+}
+
+/// Load initial shortcut settings from the store file (used before app is fully set up)
+#[cfg(desktop)]
+fn load_initial_settings() -> InitialShortcutSettings {
     let app_data_dir = dirs::data_dir()
         .map(|p| p.join("com.tambourine.voice-dictation"))
         .unwrap_or_default();
     let settings_path = app_data_dir.join("settings.json");
 
+    // The store plugin uses a JSON object with keys at the top level
     if settings_path.exists() {
-        std::fs::read_to_string(&settings_path)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok())
-            .unwrap_or_default()
-    } else {
-        AppSettings::default()
+        if let Ok(content) = std::fs::read_to_string(&settings_path) {
+            if let Ok(store_data) = serde_json::from_str::<serde_json::Value>(&content) {
+                let toggle_hotkey = store_data
+                    .get("toggle_hotkey")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_else(HotkeyConfig::default_toggle);
+                let hold_hotkey = store_data
+                    .get("hold_hotkey")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_else(HotkeyConfig::default_hold);
+                let paste_last_hotkey = store_data
+                    .get("paste_last_hotkey")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_else(HotkeyConfig::default_paste_last);
+
+                return InitialShortcutSettings {
+                    toggle_hotkey,
+                    hold_hotkey,
+                    paste_last_hotkey,
+                };
+            }
+        }
+    }
+
+    InitialShortcutSettings {
+        toggle_hotkey: HotkeyConfig::default_toggle(),
+        hold_hotkey: HotkeyConfig::default_hold(),
+        paste_last_hotkey: HotkeyConfig::default_paste_last(),
     }
 }
 
@@ -226,28 +320,20 @@ pub fn run() {
         builder = builder.plugin(build_global_shortcut_plugin());
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
     builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::text::type_text,
             commands::text::get_server_url,
-            commands::settings::get_settings,
-            commands::settings::save_settings,
-            commands::settings::update_toggle_hotkey,
-            commands::settings::update_hold_hotkey,
-            commands::settings::update_paste_last_hotkey,
-            commands::settings::update_toggle_hotkey_live,
-            commands::settings::update_hold_hotkey_live,
-            commands::settings::update_paste_last_hotkey_live,
-            commands::settings::update_selected_mic,
-            commands::settings::update_sound_enabled,
-            commands::settings::update_cleanup_prompt_sections,
-            commands::settings::update_stt_provider,
-            commands::settings::update_llm_provider,
-            commands::settings::update_auto_mute_audio,
-            commands::settings::update_stt_timeout,
-            commands::settings::reset_hotkeys_to_defaults,
+            commands::settings::register_shortcuts,
+            commands::settings::unregister_shortcuts,
             is_audio_mute_supported,
             commands::history::add_history_entry,
             commands::history::get_history,
@@ -256,14 +342,11 @@ pub fn run() {
             commands::overlay::resize_overlay,
         ])
         .setup(|app| {
-            // Initialize settings manager and history storage
+            // Initialize history storage
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data directory");
-
-            let settings_manager = SettingsManager::new(app_data_dir.clone());
-            app.manage(settings_manager);
 
             let history_storage = HistoryStorage::new(app_data_dir);
             app.manage(history_storage);
@@ -290,7 +373,38 @@ pub fn run() {
             .focusable(false)
             .accept_first_mouse(true)
             .visible(true)
+            .visible_on_all_workspaces(true)
+            .background_throttling(BackgroundThrottlingPolicy::Disabled)
             .build()?;
+
+            // On macOS, convert to NSPanel for better fullscreen app behavior
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_nspanel::{CollectionBehavior, PanelLevel, WebviewWindowExt};
+                match overlay.to_panel::<OverlayPanel>() {
+                    Ok(panel) => {
+                        log::info!("[NSPanel] Successfully converted overlay to NSPanel");
+                        // Configure panel to float above fullscreen apps
+                        panel.set_level(PanelLevel::ScreenSaver.value());
+                        panel.set_floating_panel(true);
+
+                        // Set collection behavior to appear on all spaces including fullscreen
+                        let behavior = CollectionBehavior::new()
+                            .can_join_all_spaces()
+                            .full_screen_auxiliary();
+                        panel.set_collection_behavior(behavior.value());
+
+                        // Set style mask to non-activating panel
+                        let style = tauri_nspanel::StyleMask::empty().nonactivating_panel();
+                        panel.set_style_mask(style.value());
+
+                        log::info!("[NSPanel] Configured panel with ScreenSaver level, floating, and CanJoinAllSpaces + FullScreenAuxiliary behavior");
+                    }
+                    Err(e) => {
+                        log::error!("[NSPanel] Failed to convert overlay to NSPanel: {:?}", e);
+                    }
+                }
+            }
 
             // Position bottom-right
             if let Ok(Some(monitor)) = overlay.current_monitor() {
@@ -318,12 +432,14 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
+    // Load the template icon for macOS menu bar
+    // The @2x version is automatically used for retina displays
+    let icon_bytes = include_bytes!("../icons/tray-iconTemplate@2x.png");
+    let icon = tauri::image::Image::from_bytes(icon_bytes)?;
+
     let _tray = TrayIconBuilder::new()
-        .icon(
-            app.default_window_icon()
-                .ok_or("No default window icon configured")?
-                .clone(),
-        )
+        .icon(icon)
+        .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

@@ -11,6 +11,7 @@
 		"core:window:allow-set-always-on-top",
 		"core:window:allow-start-dragging",
 		"opener:default",
-		"global-shortcut:default"
+		"global-shortcut:default",
+		"store:default"
 	]
 }

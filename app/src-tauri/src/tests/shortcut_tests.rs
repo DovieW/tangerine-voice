@@ -41,7 +41,10 @@ fn test_normalize_already_normalized() {
 
 #[test]
 fn test_normalize_preserves_non_modifier_parts() {
-    assert_eq!(normalize_shortcut_string("ctrl+Backquote"), "control+backquote");
+    assert_eq!(
+        normalize_shortcut_string("ctrl+Backquote"),
+        "control+backquote"
+    );
 }
 
 #[test]

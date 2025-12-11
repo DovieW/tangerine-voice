@@ -41,18 +41,11 @@ impl fmt::Display for AudioControlError {
 
 impl std::error::Error for AudioControlError {}
 
-/// Trait for controlling system audio.
+/// Trait for controlling system audio mute state.
 ///
 /// This minimal interface allows easy migration to a cross-platform library
 /// by just swapping the implementation behind `create_controller()`.
-#[allow(dead_code)] // Methods available for future use
 pub trait SystemAudioControl: Send + Sync {
-    /// Get current system volume (0.0 - 1.0)
-    fn get_volume(&self) -> Result<f32, AudioControlError>;
-
-    /// Set system volume (0.0 - 1.0)
-    fn set_volume(&self, level: f32) -> Result<(), AudioControlError>;
-
     /// Check if system audio is muted
     fn is_muted(&self) -> Result<bool, AudioControlError>;
 

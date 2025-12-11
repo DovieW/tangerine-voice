@@ -1,5 +1,6 @@
 import { Alert, Button, Text } from "@mantine/core";
-import { AlertCircle, Info, RotateCcw } from "lucide-react";
+import { AlertCircle, RotateCcw } from "lucide-react";
+import { useState } from "react";
 import {
 	DEFAULT_HOLD_HOTKEY,
 	DEFAULT_PASTE_LAST_HOTKEY,
@@ -15,6 +16,8 @@ import {
 import type { HotkeyConfig } from "../../lib/tauri";
 import { HotkeyInput } from "../HotkeyInput";
 
+type RecordingInput = "toggle" | "hold" | "paste_last" | null;
+
 export function HotkeySettings() {
 	const { data: settings, isLoading } = useSettings();
 	const updateToggleHotkey = useUpdateToggleHotkey();
@@ -22,19 +25,15 @@ export function HotkeySettings() {
 	const updatePasteLastHotkey = useUpdatePasteLastHotkey();
 	const resetHotkeys = useResetHotkeysToDefaults();
 
+	// Track which input is currently recording (only one at a time)
+	const [recordingInput, setRecordingInput] = useState<RecordingInput>(null);
+
 	// Collect any errors from mutations
 	const error =
 		updateToggleHotkey.error ||
 		updateHoldHotkey.error ||
 		updatePasteLastHotkey.error ||
 		resetHotkeys.error;
-
-	// Show restart message when any hotkey is changed
-	const needsRestart =
-		updateToggleHotkey.isSuccess ||
-		updateHoldHotkey.isSuccess ||
-		updatePasteLastHotkey.isSuccess ||
-		resetHotkeys.isSuccess;
 
 	const handleToggleHotkeyChange = (config: HotkeyConfig) => {
 		updateToggleHotkey.mutate(config);
@@ -61,23 +60,16 @@ export function HotkeySettings() {
 					{error instanceof Error ? error.message : String(error)}
 				</Alert>
 			)}
-			{needsRestart && (
-				<Alert
-					icon={<Info size={16} />}
-					color="blue"
-					mb="md"
-					title="Restart Required"
-				>
-					Hotkey changes require an app restart to take effect.
-				</Alert>
-			)}
 			<div className="settings-card">
 				<HotkeyInput
 					label="Toggle Recording"
 					description="Press once to start recording, press again to stop"
 					value={settings?.toggle_hotkey ?? DEFAULT_TOGGLE_HOTKEY}
 					onChange={handleToggleHotkeyChange}
-					disabled={isLoading}
+					disabled={isLoading || updateToggleHotkey.isPending}
+					isRecording={recordingInput === "toggle"}
+					onStartRecording={() => setRecordingInput("toggle")}
+					onStopRecording={() => setRecordingInput(null)}
 				/>
 
 				<div style={{ marginTop: 20 }}>
@@ -86,7 +78,10 @@ export function HotkeySettings() {
 						description="Hold to record, release to stop"
 						value={settings?.hold_hotkey ?? DEFAULT_HOLD_HOTKEY}
 						onChange={handleHoldHotkeyChange}
-						disabled={isLoading}
+						disabled={isLoading || updateHoldHotkey.isPending}
+						isRecording={recordingInput === "hold"}
+						onStartRecording={() => setRecordingInput("hold")}
+						onStopRecording={() => setRecordingInput(null)}
 					/>
 				</div>
 
@@ -96,7 +91,10 @@ export function HotkeySettings() {
 						description="Paste the most recent transcription"
 						value={settings?.paste_last_hotkey ?? DEFAULT_PASTE_LAST_HOTKEY}
 						onChange={handlePasteLastHotkeyChange}
-						disabled={isLoading}
+						disabled={isLoading || updatePasteLastHotkey.isPending}
+						isRecording={recordingInput === "paste_last"}
+						onStartRecording={() => setRecordingInput("paste_last")}
+						onStopRecording={() => setRecordingInput(null)}
 					/>
 				</div>
 

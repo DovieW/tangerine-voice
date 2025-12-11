@@ -85,6 +85,18 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
 			console.warn("[Recording] Failed to disable mic:", error);
 		}
 
+		// Stop the audio track immediately to release the microphone (removes OS mic indicator)
+		// This must happen here, not in handleResponse(), so the mic is released even if
+		// the server is slow to respond. updateMic() will re-acquire when starting next recording.
+		try {
+			const tracks = client.tracks();
+			if (tracks?.local?.audio) {
+				tracks.local.audio.stop();
+			}
+		} catch (error) {
+			console.warn("[Recording] Failed to stop audio track:", error);
+		}
+
 		// Try to send stop message to server
 		try {
 			client.sendClientMessage("stop-recording", {});
@@ -98,20 +110,9 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
 	},
 
 	handleResponse: () => {
-		const { state, client } = get();
+		const { state } = get();
 		if (state === "processing") {
-			// Stop the audio track to release the microphone (removes OS mic indicator)
-			// updateMic() will re-acquire when starting next recording
-			if (client) {
-				try {
-					const tracks = client.tracks();
-					if (tracks?.local?.audio) {
-						tracks.local.audio.stop();
-					}
-				} catch (error) {
-					console.warn("[Recording] Failed to stop audio track:", error);
-				}
-			}
+			// Track is already stopped in stopRecording(), just transition state
 			set({ state: "idle" });
 		}
 	},

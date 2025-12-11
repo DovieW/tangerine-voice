@@ -1,7 +1,7 @@
-//! Windows audio control implementation using WASAPI.
+//! Windows audio mute control implementation using WASAPI.
 //!
 //! Uses the Windows Audio Session API (WASAPI) to control the default audio
-//! output device's master volume and mute state.
+//! output device's mute state.
 
 use super::{AudioControlError, SystemAudioControl};
 use windows::Win32::{
@@ -65,23 +65,6 @@ impl WindowsAudioController {
 }
 
 impl SystemAudioControl for WindowsAudioController {
-    fn get_volume(&self) -> Result<f32, AudioControlError> {
-        unsafe {
-            self.endpoint_volume
-                .GetMasterVolumeLevelScalar()
-                .map_err(|e| AudioControlError::GetPropertyFailed(format!("GetVolume: {}", e)))
-        }
-    }
-
-    fn set_volume(&self, level: f32) -> Result<(), AudioControlError> {
-        let level = level.clamp(0.0, 1.0);
-        unsafe {
-            self.endpoint_volume
-                .SetMasterVolumeLevelScalar(level, std::ptr::null())
-                .map_err(|e| AudioControlError::SetPropertyFailed(format!("SetVolume: {}", e)))
-        }
-    }
-
     fn is_muted(&self) -> Result<bool, AudioControlError> {
         unsafe {
             self.endpoint_volume

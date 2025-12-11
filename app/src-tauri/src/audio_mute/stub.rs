@@ -30,16 +30,6 @@ impl StubAudioController {
 }
 
 impl SystemAudioControl for StubAudioController {
-    fn get_volume(&self) -> Result<f32, AudioControlError> {
-        self.warn_once();
-        Ok(1.0) // Pretend volume is at 100%
-    }
-
-    fn set_volume(&self, _level: f32) -> Result<(), AudioControlError> {
-        self.warn_once();
-        Ok(())
-    }
-
     fn is_muted(&self) -> Result<bool, AudioControlError> {
         self.warn_once();
         Ok(false) // Pretend not muted

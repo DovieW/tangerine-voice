@@ -1,5 +1,5 @@
 import { Loader } from "@mantine/core";
-import { useTimeout } from "@mantine/hooks";
+import { useResizeObserver, useTimeout } from "@mantine/hooks";
 import { PipecatClient, RTVIEvent } from "@pipecat-ai/client-js";
 import {
 	PipecatClientProvider,
@@ -7,7 +7,9 @@ import {
 } from "@pipecat-ai/client-react";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import { ThemeProvider, UserAudioComponent } from "@pipecat-ai/voice-ui-kit";
+import { useDrag } from "@use-gesture/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import {
 	useAddHistoryEntry,
 	useServerUrl,
@@ -21,29 +23,16 @@ import { type ConnectionState, tauriAPI } from "./lib/tauri";
 import { useRecordingStore } from "./stores/recordingStore";
 import "./app.css";
 
-function isTranscriptMessage(
-	msg: unknown,
-): msg is { type: "transcript"; text: string } {
-	return (
-		typeof msg === "object" &&
-		msg !== null &&
-		"type" in msg &&
-		"text" in msg &&
-		(msg as { type: unknown }).type === "transcript" &&
-		typeof (msg as { text: unknown }).text === "string"
-	);
-}
+// Zod schemas for message validation
+const TranscriptMessageSchema = z.object({
+	type: z.literal("transcript"),
+	text: z.string(),
+});
 
-function isRecordingCompleteMessage(
-	msg: unknown,
-): msg is { type: "recording-complete"; hasContent: boolean } {
-	return (
-		typeof msg === "object" &&
-		msg !== null &&
-		"type" in msg &&
-		(msg as { type: unknown }).type === "recording-complete"
-	);
-}
+const RecordingCompleteMessageSchema = z.object({
+	type: z.literal("recording-complete"),
+	hasContent: z.boolean().optional(),
+});
 
 function RecordingControl() {
 	const client = usePipecatClient();
@@ -56,12 +45,12 @@ function RecordingControl() {
 		handleConnected,
 		handleDisconnected,
 	} = useRecordingStore();
-	const containerRef = useRef<HTMLDivElement>(null);
 
-	// Refs for click vs drag detection
-	const isDraggingRef = useRef<boolean>(false);
-	const mouseDownPositionRef = useRef<{ x: number; y: number } | null>(null);
-	const hasDragStartedRef = useRef<boolean>(false);
+	// Use Mantine's useResizeObserver hook
+	const [containerRef, rect] = useResizeObserver();
+
+	// Ref for tracking drag state
+	const hasDragStartedRef = useRef(false);
 
 	const { data: serverUrl } = useServerUrl();
 	const { data: settings } = useSettings();
@@ -115,20 +104,12 @@ function RecordingControl() {
 		return unsubscribe;
 	}, []);
 
-	// ResizeObserver to auto-resize window to fit content
+	// Auto-resize window to fit content using Mantine's useResizeObserver
 	useEffect(() => {
-		if (!containerRef.current) return;
-
-		const observer = new ResizeObserver((entries) => {
-			const entry = entries[0];
-			if (!entry) return;
-			const { width, height } = entry.contentRect;
-			tauriAPI.resizeOverlay(Math.ceil(width), Math.ceil(height));
-		});
-
-		observer.observe(containerRef.current);
-		return () => observer.disconnect();
-	}, []);
+		if (rect.width > 0 && rect.height > 0) {
+			tauriAPI.resizeOverlay(Math.ceil(rect.width), Math.ceil(rect.height));
+		}
+	}, [rect.width, rect.height]);
 
 	// Handle start/stop recording from hotkeys
 	const onStartRecording = useCallback(async () => {
@@ -191,8 +172,13 @@ function RecordingControl() {
 				console.warn("[Pipecat] Disconnected during recording/processing");
 				try {
 					client.enableMic(false);
+					// Also stop the track to release the mic (removes OS mic indicator)
+					const tracks = client.tracks();
+					if (tracks?.local?.audio) {
+						tracks.local.audio.stop();
+					}
 				} catch {
-					// Ignore errors when disabling mic
+					// Ignore errors when cleaning up mic
 				}
 			}
 
@@ -215,17 +201,24 @@ function RecordingControl() {
 		};
 
 		const onServerMessage = async (message: unknown) => {
-			if (isTranscriptMessage(message)) {
+			const transcriptResult = TranscriptMessageSchema.safeParse(message);
+			if (transcriptResult.success) {
 				clearResponseTimeout();
-				console.debug("[Pipecat] Transcript:", message.text);
+				const { text } = transcriptResult.data;
+				console.debug("[Pipecat] Transcript:", text);
 				try {
-					await typeTextMutation.mutateAsync(message.text);
+					await typeTextMutation.mutateAsync(text);
 				} catch (error) {
 					console.error("[Pipecat] Failed to type text:", error);
 				}
-				addHistoryEntry.mutate(message.text);
+				addHistoryEntry.mutate(text);
 				handleResponse();
-			} else if (isRecordingCompleteMessage(message)) {
+				return;
+			}
+
+			const recordingCompleteResult =
+				RecordingCompleteMessageSchema.safeParse(message);
+			if (recordingCompleteResult.success) {
 				clearResponseTimeout();
 				handleResponse();
 			}
@@ -276,77 +269,39 @@ function RecordingControl() {
 		}
 	}, [state, onStartRecording, onStopRecording]);
 
-	// Mouse move handler for drag detection
-	const handleMouseMove = useCallback((event: MouseEvent) => {
-		if (!mouseDownPositionRef.current || hasDragStartedRef.current) {
-			return;
-		}
+	// Drag handler using @use-gesture/react
+	// Handles unfocused window dragging (data-tauri-drag-region doesn't work on unfocused windows)
+	const bindDrag = useDrag(
+		({ movement: [mx, my], first, last, memo }) => {
+			if (first) {
+				hasDragStartedRef.current = false;
+				return false; // memo = false (hasn't started dragging)
+			}
 
-		// Calculate distance moved from initial position
-		const deltaX = event.clientX - mouseDownPositionRef.current.x;
-		const deltaY = event.clientY - mouseDownPositionRef.current.y;
-		const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+			const distance = Math.sqrt(mx * mx + my * my);
+			const DRAG_THRESHOLD = 5;
 
-		// If movement exceeds threshold, start dragging
-		const DRAG_THRESHOLD = 5;
-		if (distance > DRAG_THRESHOLD) {
-			hasDragStartedRef.current = true;
-			isDraggingRef.current = true;
-			tauriAPI.startDragging();
-		}
-	}, []);
+			// Start dragging once threshold is exceeded
+			if (!memo && distance > DRAG_THRESHOLD) {
+				hasDragStartedRef.current = true;
+				tauriAPI.startDragging();
+				return true; // memo = true (dragging started)
+			}
 
-	// Mouse up handler to cleanup listeners
-	const handleMouseUp = useCallback(() => {
-		// Clean up window event listeners
-		window.removeEventListener("mousemove", handleMouseMove);
-		window.removeEventListener("mouseup", handleMouseUp);
+			if (last) {
+				hasDragStartedRef.current = false;
+			}
 
-		// Reset drag state
-		if (hasDragStartedRef.current) {
-			isDraggingRef.current = false;
-		}
-
-		// Reset tracking refs
-		mouseDownPositionRef.current = null;
-		hasDragStartedRef.current = false;
-	}, [handleMouseMove]);
-
-	// Drag handler for unfocused window (data-tauri-drag-region doesn't work on unfocused windows)
-	const handleMouseDown = useCallback(
-		(event: React.MouseEvent) => {
-			if (event.button !== 0) return; // Only handle left clicks
-
-			// Record initial position
-			mouseDownPositionRef.current = {
-				x: event.clientX,
-				y: event.clientY,
-			};
-
-			// Reset drag state
-			isDraggingRef.current = false;
-			hasDragStartedRef.current = false;
-
-			// Attach window listeners to track movement
-			window.addEventListener("mousemove", handleMouseMove);
-			window.addEventListener("mouseup", handleMouseUp);
+			return memo;
 		},
-		[handleMouseMove, handleMouseUp],
+		{ filterTaps: true },
 	);
-
-	// Cleanup effect to remove window listeners on unmount
-	useEffect(() => {
-		return () => {
-			window.removeEventListener("mousemove", handleMouseMove);
-			window.removeEventListener("mouseup", handleMouseUp);
-		};
-	}, [handleMouseMove, handleMouseUp]);
 
 	return (
 		<div
 			ref={containerRef}
 			role="application"
-			onMouseDown={handleMouseDown}
+			{...bindDrag()}
 			style={{
 				width: "fit-content",
 				height: "fit-content",
