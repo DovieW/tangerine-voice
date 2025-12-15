@@ -25,7 +25,7 @@ Open-source alternative to [Wispr Flow](https://wisprflow.ai) and [Superwhisper]
 
 ## Why?
 
-**Your voice, any app.** Tambourine gives you a universal voice interface that works everywhere: emails, messages, documents, code editors, terminals. Press a hotkey, speak, and your words are typed at your cursor. No copy-pasting, no app switching, no limitations.
+**Your voice, any app.** Tambourine gives you a universal voice-to-text interface that works everywhere: emails, messages, documents, code editors, terminals. Press a hotkey, speak, and your words are typed at your cursor. No copy-pasting, no app switching, no limitations.
 
 **Speak at the speed of thought.** Typing averages 40-50 wpm, but speaking averages 130-160 wpm. Capture ideas before they slip away, and give your hands a break from the keyboard.
 
@@ -229,10 +229,17 @@ The app connects to `localhost:8765` by default via WebRTC. Settings are persist
   - Advanced Features - Backtrack corrections ("scratch that"), list formatting
   - Personal Dictionary - Custom words
 
-## Technology Stack
+## Tech Stack
 
-- **App**: Tauri, Rust, React, TypeScript, Tailwind CSS, Mantine
-- **Server**: Python, Pipecat, FastAPI
+**Desktop App:** Rust, Tauri
+**Frontend:** TypeScript, React, Vite
+**UI:** Mantine, Tailwind CSS
+**State Management:** Zustand, Tanstack Query
+**Backend:** Python, FastAPI
+**Voice Pipeline:** Pipecat
+**Communications:** WebRTC
+**Validation:** Zod, Pydantic
+**Code Quality:** Biome, Ruff, Ty, Clippy
 
 ## Acknowledgments
 
