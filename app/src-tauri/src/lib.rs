@@ -68,6 +68,27 @@ fn get_setting_from_store<T: serde::de::DeserializeOwned>(
         .unwrap_or(default)
 }
 
+/// Emit a system event to the frontend for debugging
+#[cfg(desktop)]
+fn emit_system_event(app: &AppHandle, event_type: &str, message: &str, details: Option<&str>) {
+    #[derive(serde::Serialize, Clone)]
+    struct SystemEvent {
+        timestamp: String,
+        event_type: String,
+        message: String,
+        details: Option<String>,
+    }
+
+    let event = SystemEvent {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        event_type: event_type.to_string(),
+        message: message.to_string(),
+        details: details.map(|s| s.to_string()),
+    };
+
+    let _ = app.emit("system-event", event);
+}
+
 /// Start recording with sound and audio mute handling
 #[cfg(desktop)]
 fn start_recording(
@@ -78,13 +99,20 @@ fn start_recording(
     auto_mute_audio: bool,
     source: &str,
 ) {
-    log::info!("{}: starting recording", source);
+    // Log current pipeline state before attempting to start
+    let current_state = app
+        .try_state::<pipeline::SharedPipeline>()
+        .map(|p| p.state());
+    log::info!("{}: starting recording (current pipeline state: {:?})", source, current_state);
+    emit_system_event(app, "shortcut", &format!("{}: starting recording", source), Some(&format!("Pipeline state: {:?}", current_state)));
 
     // Start pipeline recording FIRST - if it fails, don't do anything else
     if let Some(pipeline) = app.try_state::<pipeline::SharedPipeline>() {
         if let Err(e) = pipeline.start_recording() {
-            log::error!("Failed to start pipeline recording: {}", e);
-            let _ = app.emit("pipeline-error", e.to_string());
+            log::error!("{}: Failed to start pipeline recording: {} (state was: {:?})", source, e, current_state);
+            let error_msg = format!("{} (pipeline state: {:?})", e, current_state);
+            emit_system_event(app, "error", &format!("{}: Failed to start recording", source), Some(&error_msg));
+            let _ = app.emit("pipeline-error", error_msg);
             return;
         }
     }
@@ -130,6 +158,7 @@ fn stop_recording(
 ) {
     state.is_recording.store(false, Ordering::SeqCst);
     log::info!("{}: stopping recording", source);
+    emit_system_event(app, "shortcut", &format!("{}: stopping recording", source), None);
     // Unmute system audio if it was muted
     if auto_mute_audio {
         if let Some(manager) = audio_mute_manager {
@@ -253,10 +282,14 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
             ShortcutState::Released => {
                 if state.toggle_key_held.swap(false, Ordering::SeqCst) {
                     // Check pipeline state directly instead of AppState
-                    let is_recording = app
+                    let pipeline_state = app
                         .try_state::<pipeline::SharedPipeline>()
-                        .map(|p| p.state() == pipeline::PipelineState::Recording)
-                        .unwrap_or(false);
+                        .map(|p| p.state());
+
+                    log::info!("Toggle released: pipeline state = {:?}", pipeline_state);
+                    emit_system_event(app, "shortcut", "Toggle key released", Some(&format!("Pipeline state: {:?}", pipeline_state)));
+
+                    let is_recording = pipeline_state == Some(pipeline::PipelineState::Recording);
 
                     if is_recording {
                         stop_recording(
@@ -286,9 +319,15 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
             ShortcutState::Pressed => {
                 if !state.ptt_key_held.swap(true, Ordering::SeqCst) {
                     // Only start if pipeline is not already recording/transcribing
-                    let can_start = app
+                    let pipeline_state = app
                         .try_state::<pipeline::SharedPipeline>()
-                        .map(|p| p.state().can_start_recording())
+                        .map(|p| p.state());
+
+                    log::info!("Hold pressed: pipeline state = {:?}", pipeline_state);
+                    emit_system_event(app, "shortcut", "Hold key pressed", Some(&format!("Pipeline state: {:?}", pipeline_state)));
+
+                    let can_start = pipeline_state
+                        .map(|s| s.can_start_recording())
                         .unwrap_or(false);
 
                     if can_start {

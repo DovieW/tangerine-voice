@@ -5,6 +5,7 @@ import {
 	Box,
 	Button,
 	Code,
+	CopyButton,
 	Group,
 	Paper,
 	Stack,
@@ -12,18 +13,22 @@ import {
 	Title,
 	Tooltip,
 } from "@mantine/core";
+import { listen } from "@tauri-apps/api/event";
 import {
 	AlertCircle,
 	AlertTriangle,
 	Bug,
 	CheckCircle,
 	Clock,
+	Copy,
 	Info,
 	Loader,
 	RefreshCw,
 	Trash2,
 	XCircle,
+	Zap,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useClearRequestLogs, useRequestLogs } from "../lib/queries";
 import type {
 	LogEntry,
@@ -31,6 +36,14 @@ import type {
 	RequestLog,
 	RequestStatus,
 } from "../lib/tauri";
+
+// System event from Rust backend
+interface SystemEvent {
+	timestamp: string;
+	event_type: string;
+	message: string;
+	details: string | null;
+}
 
 function formatTimestamp(timestamp: string): string {
 	const date = new Date(timestamp);
@@ -225,19 +238,38 @@ function RequestLogItem({ log }: { log: RequestLog }) {
 							p="sm"
 							style={{ borderColor: "var(--mantine-color-red-5)" }}
 						>
-							<Group gap="xs" align="flex-start">
-								<AlertCircle
-									size={16}
-									style={{ color: "var(--mantine-color-red-5)" }}
-								/>
-								<Box style={{ flex: 1 }}>
-									<Text size="xs" fw={600} c="red">
-										Error:
-									</Text>
-									<Text size="sm" c="red">
-										{log.error_message}
-									</Text>
-								</Box>
+							<Group gap="xs" align="flex-start" justify="space-between">
+								<Group gap="xs" align="flex-start" style={{ flex: 1 }}>
+									<AlertCircle
+										size={16}
+										style={{
+											color: "var(--mantine-color-red-5)",
+											flexShrink: 0,
+										}}
+									/>
+									<Box style={{ flex: 1 }}>
+										<Text size="xs" fw={600} c="red">
+											Error:
+										</Text>
+										<Text size="sm" c="red" style={{ wordBreak: "break-word" }}>
+											{log.error_message}
+										</Text>
+									</Box>
+								</Group>
+								<CopyButton value={log.error_message}>
+									{({ copied, copy }) => (
+										<Tooltip label={copied ? "Copied!" : "Copy error"}>
+											<ActionIcon
+												variant="subtle"
+												color={copied ? "teal" : "gray"}
+												onClick={copy}
+												size="sm"
+											>
+												<Copy size={14} />
+											</ActionIcon>
+										</Tooltip>
+									)}
+								</CopyButton>
 							</Group>
 						</Paper>
 					)}
@@ -282,6 +314,23 @@ function RequestLogItem({ log }: { log: RequestLog }) {
 							</Paper>
 						</Box>
 					)}
+
+					{/* Copy full log as JSON for debugging */}
+					<Group justify="flex-end">
+						<CopyButton value={JSON.stringify(log, null, 2)}>
+							{({ copied, copy }) => (
+								<Button
+									variant="subtle"
+									color={copied ? "teal" : "gray"}
+									size="xs"
+									leftSection={<Copy size={14} />}
+									onClick={copy}
+								>
+									{copied ? "Copied!" : "Copy Full Log (JSON)"}
+								</Button>
+							)}
+						</CopyButton>
+					</Group>
 				</Stack>
 			</Accordion.Panel>
 		</Accordion.Item>
@@ -291,6 +340,18 @@ function RequestLogItem({ log }: { log: RequestLog }) {
 export function LogsView() {
 	const { data: logs, isLoading, refetch, isRefetching } = useRequestLogs(100);
 	const clearLogsMutation = useClearRequestLogs();
+	const [systemEvents, setSystemEvents] = useState<SystemEvent[]>([]);
+
+	// Listen for system events from Rust
+	useEffect(() => {
+		const unlisten = listen<SystemEvent>("system-event", (event) => {
+			setSystemEvents((prev) => [event.payload, ...prev].slice(0, 50)); // Keep last 50
+		});
+
+		return () => {
+			unlisten.then((fn) => fn());
+		};
+	}, []);
 
 	return (
 		<Stack gap="md" p="md">
@@ -324,6 +385,85 @@ export function LogsView() {
 				View detailed logs of voice transcription requests. Logs are stored in
 				memory and cleared on app restart.
 			</Text>
+
+			{/* System Events Panel */}
+			{systemEvents.length > 0 && (
+				<Paper
+					withBorder
+					p="sm"
+					style={{ background: "var(--mantine-color-dark-8)" }}
+				>
+					<Group justify="space-between" mb="xs">
+						<Group gap="xs">
+							<Zap
+								size={16}
+								style={{ color: "var(--mantine-color-yellow-5)" }}
+							/>
+							<Text size="sm" fw={600}>
+								System Events (Live)
+							</Text>
+						</Group>
+						<Group gap="xs">
+							<CopyButton value={JSON.stringify(systemEvents, null, 2)}>
+								{({ copied, copy }) => (
+									<Button
+										variant="subtle"
+										color={copied ? "teal" : "gray"}
+										size="xs"
+										leftSection={<Copy size={12} />}
+										onClick={copy}
+									>
+										{copied ? "Copied!" : "Copy All"}
+									</Button>
+								)}
+							</CopyButton>
+							<Button
+								variant="subtle"
+								color="gray"
+								size="xs"
+								onClick={() => setSystemEvents([])}
+							>
+								Clear
+							</Button>
+						</Group>
+					</Group>
+					<Stack gap={4} style={{ maxHeight: 200, overflowY: "auto" }}>
+						{systemEvents.map((event, idx) => (
+							<Group
+								key={`${event.timestamp}-${idx}`}
+								gap="xs"
+								wrap="nowrap"
+								align="flex-start"
+							>
+								<Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
+									{new Date(event.timestamp).toLocaleTimeString()}
+								</Text>
+								<Badge
+									size="xs"
+									color={
+										event.event_type === "error"
+											? "red"
+											: event.event_type === "shortcut"
+												? "blue"
+												: "gray"
+									}
+								>
+									{event.event_type}
+								</Badge>
+								<Text size="xs" style={{ flex: 1 }}>
+									{event.message}
+									{event.details && (
+										<Text span c="dimmed" size="xs">
+											{" "}
+											- {event.details}
+										</Text>
+									)}
+								</Text>
+							</Group>
+						))}
+					</Stack>
+				</Paper>
+			)}
 
 			{isLoading ? (
 				<Paper withBorder p="xl" ta="center">
