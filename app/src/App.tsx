@@ -5,11 +5,10 @@ import { HistoryFeed } from "./components/HistoryFeed";
 import { Logo } from "./components/Logo";
 import { LogsView } from "./components/LogsView";
 import {
-	ApiKeysSettings,
-	AudioSettings,
-	HotkeySettings,
-	PromptSettings,
-	ProvidersSettings,
+  ApiKeysSettings,
+  AudioSettings,
+  HotkeySettings,
+  PromptSettings,
 } from "./components/settings";
 import {
 	DEFAULT_HOLD_HOTKEY,
@@ -211,10 +210,9 @@ function SettingsView() {
       >
         <Tabs.List>
           <Tabs.Tab value="api-keys">API Keys</Tabs.Tab>
-          <Tabs.Tab value="providers">Providers</Tabs.Tab>
+          <Tabs.Tab value="profiles">Profiles</Tabs.Tab>
           <Tabs.Tab value="audio">Audio &amp; Overlay</Tabs.Tab>
           <Tabs.Tab value="hotkeys">Hotkeys</Tabs.Tab>
-          <Tabs.Tab value="prompts">Rewrite</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="api-keys" pt="md">
@@ -223,9 +221,9 @@ function SettingsView() {
           </div>
         </Tabs.Panel>
 
-        <Tabs.Panel value="providers" pt="md">
+        <Tabs.Panel value="profiles" pt="md">
           <div className="settings-card">
-            <ProvidersSettings />
+            <PromptSettings />
           </div>
         </Tabs.Panel>
 
@@ -238,12 +236,6 @@ function SettingsView() {
         <Tabs.Panel value="hotkeys" pt="md">
           <div className="settings-card">
             <HotkeySettings />
-          </div>
-        </Tabs.Panel>
-
-        <Tabs.Panel value="prompts" pt="md">
-          <div className="settings-card">
-            <PromptSettings />
           </div>
         </Tabs.Panel>
       </Tabs>

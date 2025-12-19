@@ -18,6 +18,7 @@ mod settings;
 mod state;
 mod stt;
 mod vad;
+mod windows_apps;
 
 #[cfg(test)]
 mod tests;
@@ -655,6 +656,9 @@ pub fn run() {
             // Request logging commands
             commands::logs::get_request_logs,
             commands::logs::clear_request_logs,
+            // Window/process commands (used for per-program prompts)
+            commands::windows::list_open_windows,
+            commands::windows::get_foreground_process_path,
         ])
         .setup(|app| {
             // Initialize history storage
@@ -861,9 +865,26 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 #[cfg(desktop)]
 fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipeline {
     use std::time::Duration;
+    use std::collections::HashMap;
 
     // Read STT settings from store
     let stt_provider: String = get_setting_from_store(app, "stt_provider", "groq".to_string());
+
+    // Read STT model from store
+    let stt_model: Option<String> = get_setting_from_store(app, "stt_model", None);
+
+    // Read STT timeout from store (seconds)
+    let stt_timeout_seconds: f64 = get_setting_from_store(app, "stt_timeout_seconds", 60.0);
+
+    // Read all available STT API keys (for per-profile provider overrides at runtime)
+    let mut stt_api_keys: HashMap<String, String> = HashMap::new();
+    for provider in ["openai", "groq", "deepgram"] {
+        let key_name = format!("{}_api_key", provider);
+        let key: String = get_setting_from_store(app, &key_name, String::new());
+        if !key.is_empty() {
+            stt_api_keys.insert(provider.to_string(), key);
+        }
+    }
 
     // Get the appropriate API key based on provider
     let stt_api_key: String = match stt_provider.as_str() {
@@ -890,29 +911,69 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         })
         .unwrap_or_default();
 
-    let llm_enabled = rewrite_llm_enabled
-        && match llm_provider.as_deref() {
-            None => false,
-            Some("ollama") => true,
-            Some(_) => !llm_api_key.is_empty(),
-        };
+    // IMPORTANT: `enabled` is only the global toggle. The effective provider/key is resolved
+    // per transcription based on the active profile.
+    let llm_enabled = rewrite_llm_enabled;
+
+    // Read all available LLM API keys (for per-profile provider overrides at runtime)
+    let mut llm_api_keys: HashMap<String, String> = HashMap::new();
+    for provider in ["openai", "anthropic", "groq"] {
+        let key_name = format!("{}_api_key", provider);
+        let key: String = get_setting_from_store(app, &key_name, String::new());
+        if !key.is_empty() {
+            llm_api_keys.insert(provider.to_string(), key);
+        }
+    }
+
+    // Read rewrite prompt sections + per-program profiles from store
+    let cleanup_prompt_sections: Option<settings::CleanupPromptSectionsSetting> =
+        get_setting_from_store(app, "cleanup_prompt_sections", None);
+    let base_prompts: llm::PromptSections = cleanup_prompt_sections
+        .map(Into::into)
+        .unwrap_or_else(llm::PromptSections::default);
+
+    let rewrite_program_prompt_profiles: Vec<settings::RewriteProgramPromptProfile> =
+        get_setting_from_store(app, "rewrite_program_prompt_profiles", Vec::new());
+
+    let program_prompt_profiles: Vec<llm::ProgramPromptProfile> = rewrite_program_prompt_profiles
+        .into_iter()
+        .map(|p| llm::ProgramPromptProfile {
+            id: p.id,
+            name: p.name,
+            program_paths: p.program_paths,
+            prompts: p
+                .cleanup_prompt_sections
+                .map(Into::into)
+                .unwrap_or_else(|| base_prompts.clone()),
+            rewrite_llm_enabled: p.rewrite_llm_enabled,
+            stt_provider: p.stt_provider,
+            stt_model: p.stt_model,
+            stt_timeout_seconds: p.stt_timeout_seconds,
+            llm_provider: p.llm_provider,
+            llm_model: p.llm_model,
+        })
+        .collect();
 
     let config = pipeline::PipelineConfig {
         stt_provider,
         stt_api_key,
-        stt_model: None,
+        stt_api_keys,
+        stt_model,
         max_duration_secs: 300.0,
         retry_config: stt::RetryConfig::default(),
         vad_config: vad_settings.to_vad_auto_stop_config(),
-        transcription_timeout: Duration::from_secs(60),
+        transcription_timeout: Duration::from_secs_f64(stt_timeout_seconds),
         max_recording_bytes: 50 * 1024 * 1024, // 50MB
         llm_config: llm::LlmConfig {
             enabled: llm_enabled,
             provider: llm_provider.unwrap_or_else(|| "openai".to_string()),
             api_key: llm_api_key,
             model: llm_model,
+            prompts: base_prompts,
+            program_prompt_profiles,
             ..Default::default()
         },
+        llm_api_keys,
     };
 
     log::info!(

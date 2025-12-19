@@ -140,8 +140,32 @@ pub struct LlmConfig {
     pub ollama_url: Option<String>,
     /// Prompt sections configuration
     pub prompts: PromptSections,
+    /// Optional per-program prompt overrides (matched against the foreground executable path)
+    pub program_prompt_profiles: Vec<ProgramPromptProfile>,
     /// Request timeout
     pub timeout: Duration,
+}
+
+/// Per-program prompt override profile.
+///
+/// If the active/foreground executable path matches any entry in `program_paths`, `prompts` is used instead of
+/// the default `LlmConfig.prompts`.
+#[derive(Debug, Clone)]
+pub struct ProgramPromptProfile {
+    pub id: String,
+    pub name: String,
+    pub program_paths: Vec<String>,
+    pub prompts: PromptSections,
+
+    /// Optional per-profile gate for rewrite (falls back to LlmConfig.enabled)
+    pub rewrite_llm_enabled: Option<bool>,
+
+    // Optional per-profile overrides for the pipeline
+    pub stt_provider: Option<String>,
+    pub stt_model: Option<String>,
+    pub stt_timeout_seconds: Option<f64>,
+    pub llm_provider: Option<String>,
+    pub llm_model: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -153,6 +177,7 @@ impl Default for LlmConfig {
             model: None,
             ollama_url: None,
             prompts: PromptSections::default(),
+            program_prompt_profiles: Vec::new(),
             timeout: DEFAULT_LLM_TIMEOUT,
         }
     }

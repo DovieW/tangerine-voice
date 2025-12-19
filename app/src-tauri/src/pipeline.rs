@@ -20,10 +20,58 @@ use crate::llm::{
     format_text, AnthropicLlmProvider, GroqLlmProvider, LlmConfig, LlmError, LlmProvider,
     OllamaLlmProvider, OpenAiLlmProvider,
 };
-use crate::stt::{AudioFormat, RetryConfig, SttError, SttRegistry, with_retry};
+use crate::stt::{AudioFormat, RetryConfig, SttError, SttProvider, SttRegistry, with_retry};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+
+fn normalize_program_path(path: &str) -> String {
+    // Windows comparisons are case-insensitive, and we want to treat / and \ equivalently.
+    path.replace('/', "\\").to_lowercase()
+}
+
+fn select_profile_for_foreground_app(llm_config: &LlmConfig) -> Option<crate::llm::ProgramPromptProfile> {
+    let foreground = crate::windows_apps::get_foreground_process_path();
+    let Some(foreground) = foreground else {
+        return None;
+    };
+
+    let foreground_norm = normalize_program_path(&foreground);
+
+    for profile in &llm_config.program_prompt_profiles {
+        if profile
+            .program_paths
+            .iter()
+            .any(|p| normalize_program_path(p) == foreground_norm)
+        {
+            log::debug!(
+                "Pipeline: Using profile '{}' for foreground app {}",
+                profile.name,
+                foreground
+            );
+            return Some(profile.clone());
+        }
+    }
+
+    None
+}
+
+fn canonicalize_stt_provider_id(id: &str) -> String {
+    match id {
+        // Historical UI value
+        "whisper" => "local-whisper".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn seconds_to_duration_or(seconds: f64, fallback: Duration) -> Duration {
+    // Guard against invalid values.
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return fallback;
+    }
+    Duration::from_secs_f64(seconds)
+}
 
 /// Default timeout for STT transcription requests
 const DEFAULT_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -161,6 +209,8 @@ pub struct PipelineConfig {
     pub stt_provider: String,
     /// API key for the STT provider
     pub stt_api_key: String,
+    /// API keys for all configured STT providers (provider id -> key)
+    pub stt_api_keys: HashMap<String, String>,
     /// Optional model override for STT
     pub stt_model: Option<String>,
     /// Retry configuration for STT requests
@@ -173,6 +223,8 @@ pub struct PipelineConfig {
     pub max_recording_bytes: usize,
     /// LLM formatting configuration
     pub llm_config: LlmConfig,
+    /// API keys for all configured LLM providers (provider id -> key)
+    pub llm_api_keys: HashMap<String, String>,
     /// Path to local Whisper model (for local-whisper feature)
     #[cfg(feature = "local-whisper")]
     pub whisper_model_path: Option<std::path::PathBuf>,
@@ -184,12 +236,14 @@ impl Default for PipelineConfig {
             max_duration_secs: 300.0, // 5 minutes max
             stt_provider: "groq".to_string(),
             stt_api_key: String::new(),
+            stt_api_keys: HashMap::new(),
             stt_model: None,
             retry_config: RetryConfig::default(),
             vad_config: VadAutoStopConfig::default(),
             transcription_timeout: DEFAULT_TRANSCRIPTION_TIMEOUT,
             max_recording_bytes: MAX_WAV_SIZE_BYTES,
             llm_config: LlmConfig::default(),
+            llm_api_keys: HashMap::new(),
             #[cfg(feature = "local-whisper")]
             whisper_model_path: None,
         }
@@ -200,7 +254,8 @@ impl Default for PipelineConfig {
 struct PipelineInner {
     audio_capture: AudioCapture,
     stt_registry: SttRegistry,
-    llm_provider: Option<Arc<dyn LlmProvider>>,
+    stt_provider_cache: HashMap<String, Arc<dyn SttProvider>>,
+    llm_provider_cache: HashMap<String, Arc<dyn LlmProvider>>,
     state: PipelineState,
     config: PipelineConfig,
     /// Cancellation token for the current operation
@@ -213,7 +268,8 @@ impl PipelineInner {
         let mut inner = Self {
             audio_capture,
             stt_registry: SttRegistry::new(),
-            llm_provider: None,
+            stt_provider_cache: HashMap::new(),
+            llm_provider_cache: HashMap::new(),
             state: PipelineState::Idle,
             config: config.clone(),
             cancel_token: None,
@@ -222,74 +278,142 @@ impl PipelineInner {
         inner
     }
 
-    fn initialize_providers(&mut self, config: &PipelineConfig) {
-        // Initialize STT providers
-        match config.stt_provider.as_str() {
-            "openai" if !config.stt_api_key.is_empty() => {
-                let provider = crate::stt::OpenAiSttProvider::new(
-                    config.stt_api_key.clone(),
-                    config.stt_model.clone(),
-                );
-                self.stt_registry.register("openai", Arc::new(provider));
-            }
-            "groq" if !config.stt_api_key.is_empty() => {
-                let provider = crate::stt::GroqSttProvider::new(
-                    config.stt_api_key.clone(),
-                    config.stt_model.clone(),
-                );
-                self.stt_registry.register("groq", Arc::new(provider));
-            }
-            "deepgram" if !config.stt_api_key.is_empty() => {
-                let provider = crate::stt::DeepgramSttProvider::new(
-                    config.stt_api_key.clone(),
-                    config.stt_model.clone(),
-                );
-                self.stt_registry.register("deepgram", Arc::new(provider));
-            }
-            #[cfg(feature = "local-whisper")]
-            "local-whisper" => {
-                // Local whisper doesn't need an API key
-                if let Some(model_path) = &config.whisper_model_path {
-                    match crate::stt::LocalWhisperProvider::new(model_path.clone()) {
-                        Ok(provider) => {
-                            self.stt_registry
-                                .register("local-whisper", Arc::new(provider));
-                            log::info!("Local Whisper provider initialized");
-                        }
-                        Err(e) => {
-                            log::error!("Failed to initialize local Whisper: {}", e);
-                        }
-                    }
-                } else {
-                    log::warn!("Local Whisper selected but no model path configured");
-                }
-            }
-            _ => {
-                if config.stt_api_key.is_empty() {
-                    log::warn!(
-                        "STT provider '{}' requires an API key",
-                        config.stt_provider
-                    );
-                } else {
-                    log::warn!("Unknown STT provider: {}", config.stt_provider);
-                }
-            }
-        }
-        let _ = self.stt_registry.set_current(&config.stt_provider);
+    fn get_or_create_stt_provider(
+        &mut self,
+        provider_id: &str,
+        model: Option<String>,
+    ) -> Result<Arc<dyn SttProvider>, PipelineError> {
+        let provider_id = canonicalize_stt_provider_id(provider_id);
+        let model_key = model.clone().unwrap_or_else(|| "<default>".to_string());
+        let cache_key = format!("{}::{}", provider_id, model_key);
 
-        // Initialize LLM provider if enabled
-        self.llm_provider = None;
-        if config.llm_config.enabled && !config.llm_config.api_key.is_empty() {
-            self.llm_provider = Some(create_llm_provider(&config.llm_config));
-            log::info!(
-                "LLM formatting enabled with provider: {}",
-                config.llm_config.provider
-            );
-        } else if config.llm_config.enabled && config.llm_config.provider == "ollama" {
-            // Ollama doesn't need an API key
-            self.llm_provider = Some(create_llm_provider(&config.llm_config));
-            log::info!("LLM formatting enabled with local Ollama");
+        if let Some(p) = self.stt_provider_cache.get(&cache_key) {
+            return Ok(p.clone());
         }
+
+        #[cfg(feature = "local-whisper")]
+        if provider_id == "local-whisper" {
+            if let Some(model_path) = &self.config.whisper_model_path {
+                let provider = crate::stt::LocalWhisperProvider::new(model_path.clone())
+                    .map_err(|e| PipelineError::Config(format!("Local Whisper init failed: {}", e)))?;
+                let provider = Arc::new(provider);
+                self.stt_provider_cache.insert(cache_key, provider.clone());
+                return Ok(provider);
+            }
+
+            return Err(PipelineError::Config(
+                "Local Whisper selected but no model path configured".to_string(),
+            ));
+        }
+
+        let api_key = self
+            .config
+            .stt_api_keys
+            .get(&provider_id)
+            .cloned()
+            .unwrap_or_default();
+
+        if api_key.is_empty() {
+            return Err(PipelineError::Config(format!(
+                "STT provider '{}' requires an API key",
+                provider_id
+            )));
+        }
+
+        let provider: Arc<dyn SttProvider> = match provider_id.as_str() {
+            "openai" => Arc::new(crate::stt::OpenAiSttProvider::new(api_key, model)),
+            "groq" => Arc::new(crate::stt::GroqSttProvider::new(api_key, model)),
+            "deepgram" => Arc::new(crate::stt::DeepgramSttProvider::new(api_key, model)),
+            other => {
+                return Err(PipelineError::Config(format!(
+                    "Unknown STT provider: {}",
+                    other
+                )))
+            }
+        };
+
+        self.stt_provider_cache.insert(cache_key, provider.clone());
+        Ok(provider)
+    }
+
+    fn get_or_create_llm_provider(
+        &mut self,
+        provider_id: &str,
+        model: Option<String>,
+        timeout: Duration,
+        ollama_url: Option<String>,
+    ) -> Result<Arc<dyn LlmProvider>, PipelineError> {
+        let model_key = model.clone().unwrap_or_else(|| "<default>".to_string());
+        let url_key = ollama_url
+            .clone()
+            .unwrap_or_else(|| "<default-url>".to_string());
+        let cache_key = format!(
+            "{}::{}::{}::{}",
+            provider_id,
+            model_key,
+            timeout.as_secs_f64(),
+            url_key
+        );
+
+        if let Some(p) = self.llm_provider_cache.get(&cache_key) {
+            return Ok(p.clone());
+        }
+
+        let api_key = if provider_id == "ollama" {
+            String::new()
+        } else {
+            self.config
+                .llm_api_keys
+                .get(provider_id)
+                .cloned()
+                .unwrap_or_default()
+        };
+
+        if provider_id != "ollama" && api_key.is_empty() {
+            return Err(PipelineError::Config(format!(
+                "LLM provider '{}' requires an API key",
+                provider_id
+            )));
+        }
+
+        let cfg = LlmConfig {
+            enabled: true,
+            provider: provider_id.to_string(),
+            api_key,
+            model,
+            ollama_url,
+            timeout,
+            ..Default::default()
+        };
+
+        let provider = create_llm_provider(&cfg);
+        self.llm_provider_cache.insert(cache_key, provider.clone());
+        Ok(provider)
+    }
+
+    fn initialize_providers(&mut self, config: &PipelineConfig) {
+        // Clear caches on any config update.
+        self.stt_provider_cache.clear();
+        self.llm_provider_cache.clear();
+
+        // Initialize STT providers
+        self.stt_registry = SttRegistry::new();
+        let canonical = canonicalize_stt_provider_id(&config.stt_provider);
+        match self.get_or_create_stt_provider(&canonical, config.stt_model.clone()) {
+            Ok(provider) => {
+                self.stt_registry.register(&canonical, provider);
+                let _ = self.stt_registry.set_current(&canonical);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Pipeline: Default STT provider '{}' not initialized: {}",
+                    canonical,
+                    e
+                );
+            }
+        }
+
+        // Note: LLM providers are created on-demand per transcription based on the active profile.
     }
 
     /// Reset to idle state, clearing any error condition
@@ -439,7 +563,7 @@ impl SharedPipeline {
         &self,
     ) -> Result<TranscriptionResult, PipelineError> {
         // Phase 1: Stop recording and prepare for transcription (synchronous, holds lock briefly)
-        let (wav_bytes, stt_provider, llm_provider, llm_prompts, retry_config, timeout, cancel_token) = {
+        let (wav_bytes, stt_provider, llm_provider, llm_prompts, llm_timeout, retry_config, timeout, cancel_token) = {
             let mut inner = self.inner.lock().map_err(|e| PipelineError::Lock(e.to_string()))?;
 
             if !inner.state.can_stop_recording() {
@@ -463,21 +587,128 @@ impl SharedPipeline {
 
             inner.state = PipelineState::Transcribing;
 
-            let stt_provider = inner
-                .stt_registry
-                .get_current()
-                .ok_or_else(|| {
-                    inner.set_error("No STT provider configured");
-                    PipelineError::NoProvider
-                })?;
+            let llm_config = inner.config.llm_config.clone();
+            let active_profile = select_profile_for_foreground_app(&llm_config);
+            let llm_prompts = active_profile
+                .as_ref()
+                .map(|p| p.prompts.clone())
+                .unwrap_or_else(|| llm_config.prompts.clone());
 
-            let llm_provider = inner.llm_provider.clone();
-            let llm_prompts = inner.config.llm_config.prompts.clone();
+            // Resolve effective STT settings (profile overrides -> global defaults, with safe fallback)
+            let desired_stt_provider = canonicalize_stt_provider_id(
+                active_profile
+                    .as_ref()
+                    .and_then(|p| p.stt_provider.as_deref())
+                    .unwrap_or(inner.config.stt_provider.as_str()),
+            );
+            let desired_stt_model = active_profile
+                .as_ref()
+                .and_then(|p| p.stt_model.clone())
+                .or_else(|| inner.config.stt_model.clone());
+            let desired_timeout = active_profile
+                .as_ref()
+                .and_then(|p| p.stt_timeout_seconds)
+                .map(|s| seconds_to_duration_or(s, inner.config.transcription_timeout))
+                .unwrap_or(inner.config.transcription_timeout);
+
+            let stt_provider = match inner.get_or_create_stt_provider(&desired_stt_provider, desired_stt_model.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    // If the profile specified an override provider, fall back to global provider.
+                    let global_provider = canonicalize_stt_provider_id(&inner.config.stt_provider);
+                    if global_provider != desired_stt_provider {
+                        log::warn!(
+                            "Pipeline: Profile STT provider '{}' unavailable ({}), falling back to '{}'",
+                            desired_stt_provider,
+                            e,
+                            global_provider
+                        );
+                        let global_model = inner.config.stt_model.clone();
+                        inner.get_or_create_stt_provider(&global_provider, global_model)
+                            .map_err(|err| {
+                                inner.set_error(&format!("No STT provider configured: {}", err));
+                                PipelineError::NoProvider
+                            })?
+                    } else {
+                        inner.set_error(&format!("No STT provider configured: {}", e));
+                        return Err(PipelineError::NoProvider);
+                    }
+                }
+            };
+
+            // Resolve effective LLM provider/model (profile overrides -> global defaults), gated by
+            // the active profile's enable flag (falls back to the global enable).
+            let llm_timeout = llm_config.timeout;
+            let effective_llm_enabled = active_profile
+                .as_ref()
+                .and_then(|p| p.rewrite_llm_enabled)
+                .unwrap_or(inner.config.llm_config.enabled);
+
+            let llm_provider = if effective_llm_enabled {
+                let desired_llm_provider = active_profile
+                    .as_ref()
+                    .and_then(|p| p.llm_provider.clone())
+                    .unwrap_or_else(|| llm_config.provider.clone());
+                let desired_llm_model = active_profile
+                    .as_ref()
+                    .and_then(|p| p.llm_model.clone())
+                    .or_else(|| llm_config.model.clone());
+
+                match inner.get_or_create_llm_provider(
+                    desired_llm_provider.as_str(),
+                    desired_llm_model.clone(),
+                    llm_timeout,
+                    llm_config.ollama_url.clone(),
+                ) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        // Fallback to global provider if profile requested a different one.
+                        if active_profile
+                            .as_ref()
+                            .and_then(|p| p.llm_provider.as_ref())
+                            .is_some()
+                            && desired_llm_provider != llm_config.provider
+                        {
+                            log::warn!(
+                                "Pipeline: Profile LLM provider '{}' unavailable ({}), falling back to '{}'",
+                                desired_llm_provider,
+                                e,
+                                llm_config.provider
+                            );
+                            inner
+                                .get_or_create_llm_provider(
+                                    llm_config.provider.as_str(),
+                                    llm_config.model.clone(),
+                                    llm_timeout,
+                                    llm_config.ollama_url.clone(),
+                                )
+                                .ok()
+                        } else {
+                            log::warn!(
+                                "Pipeline: LLM disabled for this transcription ({}).",
+                                e
+                            );
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+
             let retry_config = inner.config.retry_config.clone();
-            let timeout = inner.config.transcription_timeout;
             let cancel_token = inner.cancel_token.clone().unwrap_or_else(CancellationToken::new);
 
-            (wav_bytes, stt_provider, llm_provider, llm_prompts, retry_config, timeout, cancel_token)
+            (
+                wav_bytes,
+                stt_provider,
+                llm_provider,
+                llm_prompts,
+                llm_timeout,
+                retry_config,
+                desired_timeout,
+                cancel_token,
+            )
         };
 
         log::info!(
@@ -553,7 +784,6 @@ impl SharedPipeline {
             let llm_start = std::time::Instant::now();
 
             // Apply LLM formatting with timeout
-            let llm_timeout = Duration::from_secs(30);
             let llm_result = tokio::select! {
                 biased;
 

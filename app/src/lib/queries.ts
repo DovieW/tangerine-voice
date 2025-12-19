@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
-	type CleanupPromptSections,
-	configAPI,
-	type HotkeyConfig,
-	logsAPI,
-	type OutputMode,
-	tauriAPI,
-	validateHotkeyNotDuplicate,
-	type WidgetPosition,
+  type CleanupPromptSections,
+  configAPI,
+  type HotkeyConfig,
+  logsAPI,
+  type OutputMode,
+  type RewriteProgramPromptProfile,
+  tauriAPI,
+  validateHotkeyNotDuplicate,
+  type WidgetPosition,
 } from "./tauri";
 
 export function useTypeText() {
@@ -198,14 +199,30 @@ export function useIsAudioMuteSupported() {
 }
 
 export function useUpdateCleanupPromptSections() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (sections: CleanupPromptSections | null) =>
-			tauriAPI.updateCleanupPromptSections(sections),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["settings"] });
-		},
-	});
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sections: CleanupPromptSections | null) => {
+      await tauriAPI.updateCleanupPromptSections(sections);
+      // Apply prompt changes immediately (LLM step reads prompts from pipeline config).
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateRewriteProgramPromptProfiles() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (profiles: RewriteProgramPromptProfile[]) => {
+      await tauriAPI.updateRewriteProgramPromptProfiles(profiles);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
 }
 
 export function useResetHotkeysToDefaults() {
@@ -346,12 +363,14 @@ export function useUpdateLLMModel() {
 export function useUpdateSTTTimeout() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: (timeoutSeconds: number | null) =>
-			tauriAPI.updateSTTTimeout(timeoutSeconds),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["settings"] });
-		},
-	});
+    mutationFn: async (timeoutSeconds: number | null) => {
+      await tauriAPI.updateSTTTimeout(timeoutSeconds);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
 }
 
 // Request Logs queries and mutations

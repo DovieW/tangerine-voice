@@ -247,6 +247,8 @@ pub fn pipeline_update_config(
     pipeline: State<'_, SharedPipeline>,
     config: PipelineConfigPayload,
 ) -> Result<(), CommandError> {
+    use std::collections::HashMap;
+
     let mut retry_config = crate::stt::RetryConfig::default();
     if let Some(max_retries) = config.max_retries {
         retry_config.max_retries = max_retries;
@@ -262,6 +264,7 @@ pub fn pipeline_update_config(
     let new_config = PipelineConfig {
         stt_provider: config.stt_provider.unwrap_or_else(|| "groq".to_string()),
         stt_api_key: config.stt_api_key.unwrap_or_default(),
+        stt_api_keys: HashMap::new(),
         stt_model: config.stt_model,
         max_duration_secs: config.max_duration_secs.unwrap_or(300.0),
         retry_config,
@@ -272,6 +275,7 @@ pub fn pipeline_update_config(
             .unwrap_or(Duration::from_secs(60)),
         max_recording_bytes: config.max_recording_bytes.unwrap_or(50 * 1024 * 1024),
         llm_config: crate::llm::LlmConfig::default(),
+        llm_api_keys: HashMap::new(),
     };
 
     pipeline.update_config(new_config).map_err(CommandError::from)?;

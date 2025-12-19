@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+use crate::llm::PromptSections;
+
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::Shortcut;
 
@@ -180,4 +182,93 @@ impl VadSettings {
             },
         }
     }
+}
+
+// ============================================================================
+// Rewrite prompt settings (stored in settings.json)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PromptSectionSetting {
+    pub enabled: bool,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CleanupPromptSectionsSetting {
+    pub main: PromptSectionSetting,
+    pub advanced: PromptSectionSetting,
+    pub dictionary: PromptSectionSetting,
+}
+
+impl From<CleanupPromptSectionsSetting> for PromptSections {
+    fn from(value: CleanupPromptSectionsSetting) -> Self {
+        Self {
+            main_custom: value.main.content,
+            advanced_enabled: value.advanced.enabled,
+            advanced_custom: value.advanced.content,
+            dictionary_enabled: value.dictionary.enabled,
+            dictionary_custom: value.dictionary.content,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RewriteProgramPromptProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(
+        default,
+        alias = "program_path",
+        deserialize_with = "deserialize_program_paths"
+    )]
+    pub program_paths: Vec<String>,
+    pub cleanup_prompt_sections: Option<CleanupPromptSectionsSetting>,
+
+    /// Optional per-profile gate for the rewrite step (falls back to global setting)
+    #[serde(default)]
+    pub rewrite_llm_enabled: Option<bool>,
+
+    #[serde(default)]
+    pub stt_provider: Option<String>,
+    #[serde(default)]
+    pub stt_model: Option<String>,
+    #[serde(default)]
+    pub stt_timeout_seconds: Option<f64>,
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    #[serde(default)]
+    pub llm_model: Option<String>,
+}
+
+fn deserialize_program_paths<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    let value = Option::<OneOrMany>::deserialize(deserializer)?;
+    let paths = match value {
+        None => Vec::new(),
+        Some(OneOrMany::One(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![trimmed.to_string()]
+            }
+        }
+        Some(OneOrMany::Many(v)) => v
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+    };
+
+    Ok(paths)
 }

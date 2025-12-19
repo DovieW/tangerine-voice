@@ -276,6 +276,30 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
             .unwrap_or_default()
     };
 
+    // Read all available STT API keys (for per-profile provider overrides at runtime)
+    let mut stt_api_keys: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for provider in ["openai", "groq", "deepgram"] {
+        let key_name = format!("{}_api_key", provider);
+        let key: String = app
+            .store("settings.json")
+            .ok()
+            .and_then(|store| store.get(&key_name))
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        if !key.is_empty() {
+            stt_api_keys.insert(provider.to_string(), key);
+        }
+    }
+
+    // Read STT timeout from store (seconds)
+    let stt_timeout_seconds: f64 = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("stt_timeout_seconds"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(60.0);
+
     // Read LLM settings from store
     // NOTE: If the user has not selected an LLM provider yet, keep LLM disabled.
     let rewrite_llm_enabled: bool = app
@@ -309,12 +333,63 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         })
         .unwrap_or_default();
 
-    let llm_enabled = rewrite_llm_enabled
-        && match llm_provider.as_deref() {
-            None => false,
-            Some("ollama") => true, // local
-            Some(_) => !llm_api_key.is_empty(),
-        };
+    // IMPORTANT: `enabled` is only the global toggle. The effective provider/key is resolved
+    // per transcription based on the active profile.
+    let llm_enabled = rewrite_llm_enabled;
+
+    // Read all available LLM API keys (for per-profile provider overrides at runtime)
+    let mut llm_api_keys: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for provider in ["openai", "anthropic", "groq"] {
+        let key_name = format!("{}_api_key", provider);
+        let key: String = app
+            .store("settings.json")
+            .ok()
+            .and_then(|store| store.get(&key_name))
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        if !key.is_empty() {
+            llm_api_keys.insert(provider.to_string(), key);
+        }
+    }
+
+    // Read rewrite prompt sections + per-program profiles from store
+    let cleanup_prompt_sections: Option<crate::settings::CleanupPromptSectionsSetting> = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("cleanup_prompt_sections"))
+        .and_then(|v| serde_json::from_value(v).ok());
+
+    let base_prompts: crate::llm::PromptSections = cleanup_prompt_sections
+        .map(Into::into)
+        .unwrap_or_else(crate::llm::PromptSections::default);
+
+    let rewrite_program_prompt_profiles: Vec<crate::settings::RewriteProgramPromptProfile> = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("rewrite_program_prompt_profiles"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    let program_prompt_profiles: Vec<crate::llm::ProgramPromptProfile> =
+        rewrite_program_prompt_profiles
+            .into_iter()
+            .map(|p| crate::llm::ProgramPromptProfile {
+                id: p.id,
+                name: p.name,
+                program_paths: p.program_paths,
+                prompts: p
+                    .cleanup_prompt_sections
+                    .map(Into::into)
+                    .unwrap_or_else(|| base_prompts.clone()),
+                rewrite_llm_enabled: p.rewrite_llm_enabled,
+                stt_provider: p.stt_provider,
+                stt_model: p.stt_model,
+                stt_timeout_seconds: p.stt_timeout_seconds,
+                llm_provider: p.llm_provider,
+                llm_model: p.llm_model,
+            })
+            .collect();
 
     // Read VAD settings from store
     let vad_settings: VadSettings = app
@@ -327,19 +402,23 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
     let config = PipelineConfig {
         stt_provider: stt_provider.clone(),
         stt_api_key,
+        stt_api_keys,
         stt_model: stt_model.clone(),
         max_duration_secs: 300.0,
         retry_config: RetryConfig::default(),
         vad_config: vad_settings.to_vad_auto_stop_config(),
-        transcription_timeout: std::time::Duration::from_secs(60),
+        transcription_timeout: std::time::Duration::from_secs_f64(stt_timeout_seconds),
         max_recording_bytes: 50 * 1024 * 1024, // 50MB
         llm_config: crate::llm::LlmConfig {
             enabled: llm_enabled,
             provider: llm_provider.clone().unwrap_or_else(|| "openai".to_string()),
             api_key: llm_api_key,
             model: llm_model.clone(),
+            prompts: base_prompts,
+            program_prompt_profiles,
             ..Default::default()
         },
+        llm_api_keys,
     };
 
     // Update the pipeline

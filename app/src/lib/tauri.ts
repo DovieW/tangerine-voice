@@ -47,32 +47,50 @@ export interface CleanupPromptSections {
 	dictionary: PromptSection;
 }
 
+export interface RewriteProgramPromptProfile {
+  id: string;
+  name: string;
+  program_paths: string[];
+  cleanup_prompt_sections: CleanupPromptSections | null;
+
+  // Per-profile gate for the optional LLM rewrite step (falls back to AppSettings.rewrite_llm_enabled)
+  rewrite_llm_enabled?: boolean | null;
+
+  // Per-profile overrides for the pipeline
+  stt_provider?: string | null;
+  stt_model?: string | null;
+  stt_timeout_seconds?: number | null;
+  llm_provider?: string | null;
+  llm_model?: string | null;
+}
+
 export type OverlayMode = "always" | "never" | "recording_only";
 
 export type WidgetPosition =
-	| "center"
-	| "top-left"
-	| "top-center"
-	| "top-right"
-	| "bottom-left"
-	| "bottom-center"
-	| "bottom-right";
+  | "center"
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
 
-export type OutputMode =
-	| "paste"
-	| "paste_and_clipboard"
-	| "clipboard";
+export type OutputMode = "paste" | "paste_and_clipboard" | "clipboard";
 
 function normalizeOutputMode(value: unknown): OutputMode {
-	if (value === "paste" || value === "paste_and_clipboard" || value === "clipboard") {
-		return value;
-	}
+  if (
+    value === "paste" ||
+    value === "paste_and_clipboard" ||
+    value === "clipboard"
+  ) {
+    return value;
+  }
 
-	// Legacy/disabled values:
-	// - "keystrokes"
-	// - "keystrokes_and_clipboard"
-	// - "auto_paste"
-	return "paste";
+  // Legacy/disabled values:
+  // - "keystrokes"
+  // - "keystrokes_and_clipboard"
+  // - "auto_paste"
+  return "paste";
 }
 
 export interface AppSettings {
@@ -84,6 +102,7 @@ export interface AppSettings {
   // Global gate for the optional LLM rewrite step
   rewrite_llm_enabled: boolean;
   cleanup_prompt_sections: CleanupPromptSections | null;
+  rewrite_program_prompt_profiles: RewriteProgramPromptProfile[];
   stt_provider: string | null;
   stt_model: string | null;
   llm_provider: string | null;
@@ -102,18 +121,18 @@ export interface AppSettings {
 const DEFAULT_HOTKEY_MODIFIERS = ["ctrl", "alt"];
 
 export const defaultToggleHotkey: HotkeyConfig = {
-	modifiers: DEFAULT_HOTKEY_MODIFIERS,
-	key: "Space",
+  modifiers: DEFAULT_HOTKEY_MODIFIERS,
+  key: "Space",
 };
 
 export const defaultHoldHotkey: HotkeyConfig = {
-	modifiers: DEFAULT_HOTKEY_MODIFIERS,
-	key: "Backquote",
+  modifiers: DEFAULT_HOTKEY_MODIFIERS,
+  key: "Backquote",
 };
 
 export const defaultPasteLastHotkey: HotkeyConfig = {
-	modifiers: DEFAULT_HOTKEY_MODIFIERS,
-	key: "Period",
+  modifiers: DEFAULT_HOTKEY_MODIFIERS,
+  key: "Period",
 };
 
 // ============================================================================
@@ -123,10 +142,10 @@ export const defaultPasteLastHotkey: HotkeyConfig = {
 let storeInstance: Store | null = null;
 
 async function getStore(): Promise<Store> {
-	if (!storeInstance) {
-		storeInstance = await Store.load("settings.json");
-	}
-	return storeInstance;
+  if (!storeInstance) {
+    storeInstance = await Store.load("settings.json");
+  }
+  return storeInstance;
 }
 
 // ============================================================================
@@ -137,39 +156,41 @@ async function getStore(): Promise<Store> {
  * Check if two hotkey configs are equivalent (case-insensitive comparison)
  */
 export function hotkeyIsSameAs(a: HotkeyConfig, b: HotkeyConfig): boolean {
-	if (a.key.toLowerCase() !== b.key.toLowerCase()) return false;
-	if (a.modifiers.length !== b.modifiers.length) return false;
-	return a.modifiers.every((mod) =>
-		b.modifiers.some((other) => mod.toLowerCase() === other.toLowerCase()),
-	);
+  if (a.key.toLowerCase() !== b.key.toLowerCase()) return false;
+  if (a.modifiers.length !== b.modifiers.length) return false;
+  return a.modifiers.every((mod) =>
+    b.modifiers.some((other) => mod.toLowerCase() === other.toLowerCase())
+  );
 }
 
 type HotkeyType = "toggle" | "hold" | "paste_last";
 
 const HOTKEY_LABELS: Record<HotkeyType, string> = {
-	toggle: "toggle",
-	hold: "hold",
-	paste_last: "paste last",
+  toggle: "toggle",
+  hold: "hold",
+  paste_last: "paste last",
 };
 
 /**
  * Create a Zod schema for validating a hotkey doesn't conflict with existing hotkeys
  */
 export function createHotkeyDuplicateSchema(
-	allHotkeys: Record<HotkeyType, HotkeyConfig>,
-	excludeType: HotkeyType,
+  allHotkeys: Record<HotkeyType, HotkeyConfig>,
+  excludeType: HotkeyType
 ) {
-	return HotkeyConfigSchema.superRefine((hotkey, ctx) => {
-		for (const [type, existing] of Object.entries(allHotkeys)) {
-			if (type !== excludeType && hotkeyIsSameAs(hotkey, existing)) {
-				ctx.addIssue({
-					code: "custom",
-					message: `This shortcut is already used for the ${HOTKEY_LABELS[type as HotkeyType]} hotkey`,
-				});
-				return;
-			}
-		}
-	});
+  return HotkeyConfigSchema.superRefine((hotkey, ctx) => {
+    for (const [type, existing] of Object.entries(allHotkeys)) {
+      if (type !== excludeType && hotkeyIsSameAs(hotkey, existing)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `This shortcut is already used for the ${
+            HOTKEY_LABELS[type as HotkeyType]
+          } hotkey`,
+        });
+        return;
+      }
+    }
+  });
 }
 
 /**
@@ -177,20 +198,20 @@ export function createHotkeyDuplicateSchema(
  * Returns error message if invalid, null if valid
  */
 export function validateHotkeyNotDuplicate(
-	newHotkey: HotkeyConfig,
-	allHotkeys: {
-		toggle: HotkeyConfig;
-		hold: HotkeyConfig;
-		paste_last: HotkeyConfig;
-	},
-	excludeType: HotkeyType,
+  newHotkey: HotkeyConfig,
+  allHotkeys: {
+    toggle: HotkeyConfig;
+    hold: HotkeyConfig;
+    paste_last: HotkeyConfig;
+  },
+  excludeType: HotkeyType
 ): string | null {
-	const schema = createHotkeyDuplicateSchema(allHotkeys, excludeType);
-	const result = schema.safeParse(newHotkey);
-	if (!result.success) {
-		return result.error.issues[0]?.message ?? "Invalid hotkey";
-	}
-	return null;
+  const schema = createHotkeyDuplicateSchema(allHotkeys, excludeType);
+  const result = schema.safeParse(newHotkey);
+  if (!result.success) {
+    return result.error.issues[0]?.message ?? "Invalid hotkey";
+  }
+  return null;
 }
 
 // ============================================================================
@@ -218,6 +239,72 @@ export const tauriAPI = {
   // Settings API - using store plugin directly
   async getSettings(): Promise<AppSettings> {
     const store = await getStore();
+
+    const normalizeRewriteProfile = (
+      p: any
+    ): RewriteProgramPromptProfile | null => {
+      if (!p || typeof p !== "object") return null;
+      const id = typeof p.id === "string" ? p.id : "";
+      const name = typeof p.name === "string" ? p.name : "";
+
+      const program_paths_raw = (p as any).program_paths;
+      const legacy_program_path = (p as any).program_path;
+
+      const program_paths = Array.isArray(program_paths_raw)
+        ? program_paths_raw.filter((x) => typeof x === "string")
+        : typeof legacy_program_path === "string" &&
+          legacy_program_path.length > 0
+        ? [legacy_program_path]
+        : [];
+
+      const cleanup_prompt_sections =
+        (p as any).cleanup_prompt_sections ?? null;
+      const stt_provider =
+        typeof (p as any).stt_provider === "string"
+          ? (p as any).stt_provider
+          : null;
+      const stt_model =
+        typeof (p as any).stt_model === "string" ? (p as any).stt_model : null;
+      const stt_timeout_seconds =
+        typeof (p as any).stt_timeout_seconds === "number"
+          ? (p as any).stt_timeout_seconds
+          : null;
+      const llm_provider =
+        typeof (p as any).llm_provider === "string"
+          ? (p as any).llm_provider
+          : null;
+      const llm_model =
+        typeof (p as any).llm_model === "string" ? (p as any).llm_model : null;
+      const rewrite_llm_enabled =
+        typeof (p as any).rewrite_llm_enabled === "boolean"
+          ? (p as any).rewrite_llm_enabled
+          : null;
+
+      if (!id) return null;
+
+      return {
+        id,
+        name,
+        program_paths,
+        cleanup_prompt_sections,
+        rewrite_llm_enabled,
+        stt_provider,
+        stt_model,
+        stt_timeout_seconds,
+        llm_provider,
+        llm_model,
+      };
+    };
+
+    const rawProfiles =
+      (await store.get<any>("rewrite_program_prompt_profiles")) ?? [];
+    const rewrite_program_prompt_profiles: RewriteProgramPromptProfile[] =
+      Array.isArray(rawProfiles)
+        ? rawProfiles
+            .map(normalizeRewriteProfile)
+            .filter((p): p is RewriteProgramPromptProfile => p !== null)
+        : [];
+
     return {
       toggle_hotkey:
         (await store.get<HotkeyConfig>("toggle_hotkey")) ?? defaultToggleHotkey,
@@ -235,6 +322,7 @@ export const tauriAPI = {
         (await store.get<CleanupPromptSections | null>(
           "cleanup_prompt_sections"
         )) ?? null,
+      rewrite_program_prompt_profiles,
       stt_provider: (await store.get<string | null>("stt_provider")) ?? null,
       stt_model: (await store.get<string | null>("stt_model")) ?? null,
       llm_provider: (await store.get<string | null>("llm_provider")) ?? null,
@@ -291,6 +379,22 @@ export const tauriAPI = {
     const store = await getStore();
     await store.set("cleanup_prompt_sections", sections);
     await store.save();
+  },
+
+  async updateRewriteProgramPromptProfiles(
+    profiles: RewriteProgramPromptProfile[]
+  ): Promise<void> {
+    const store = await getStore();
+    await store.set("rewrite_program_prompt_profiles", profiles);
+    await store.save();
+  },
+
+  async listOpenWindows(): Promise<OpenWindowInfo[]> {
+    return invoke("list_open_windows");
+  },
+
+  async getForegroundProcessPath(): Promise<string | null> {
+    return invoke("get_foreground_process_path");
   },
 
   async updateSTTProvider(provider: string | null): Promise<void> {
@@ -455,6 +559,11 @@ export const tauriAPI = {
     });
   },
 };
+
+export interface OpenWindowInfo {
+  title: string;
+  process_path: string;
+}
 
 // ============================================================================
 // Config API - Using Tauri commands

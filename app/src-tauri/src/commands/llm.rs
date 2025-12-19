@@ -163,6 +163,7 @@ pub fn update_llm_config(
         model: config.model,
         ollama_url: config.ollama_url,
         prompts: PromptSections::default(),
+        program_prompt_profiles: Vec::new(),
         timeout: Duration::from_secs(config.timeout_secs.unwrap_or(30)),
     };
 

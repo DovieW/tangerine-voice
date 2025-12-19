@@ -6,4 +6,5 @@ pub mod overlay;
 pub mod recording;
 pub mod settings;
 pub mod text;
+pub mod windows;
 pub mod whisper;
