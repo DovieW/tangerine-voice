@@ -133,6 +133,20 @@ export function useUpdateSoundEnabled() {
 	});
 }
 
+export function useUpdateRewriteLlmEnabled() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await tauriAPI.updateRewriteLlmEnabled(enabled);
+      // Gate the pipeline's LLM rewrite step immediately.
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
 export function useUpdateAutoMuteAudio() {
 	const queryClient = useQueryClient();
 	return useMutation({

@@ -172,165 +172,165 @@ export function ProvidersSettings() {
 		: [];
 
 	return (
-		<>
-			{/* STT Provider */}
-			<div className="settings-row">
-				<div>
-					<p className="settings-label">Speech-to-Text Provider</p>
-					<p className="settings-description">Service for transcribing audio</p>
-				</div>
-				<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-					{isLoadingProviderData ? (
-						<Loader size="sm" color="gray" />
-					) : (
-						<Select
-							data={sttProviderOptions}
-							value={settings?.stt_provider ?? null}
-							onChange={handleSTTProviderChange}
-							placeholder="Select provider"
-							withCheckIcon={false}
-							disabled={
-								sttCloudProviders.length === 0 && sttLocalProviders.length === 0
-							}
-							styles={{
-								input: {
-									backgroundColor: "var(--bg-elevated)",
-									borderColor: "var(--border-default)",
-									color: "var(--text-primary)",
-									minWidth: 200,
-								},
-							}}
-						/>
-					)}
-				</div>
-			</div>
+    <>
+      {/* STT Provider */}
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Speech-to-Text Provider</p>
+          <p className="settings-description">Service for transcribing audio</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {isLoadingProviderData ? (
+            <Loader size="sm" color="gray" />
+          ) : (
+            <Select
+              data={sttProviderOptions}
+              value={settings?.stt_provider ?? null}
+              onChange={handleSTTProviderChange}
+              placeholder="Select provider"
+              withCheckIcon={false}
+              disabled={
+                sttCloudProviders.length === 0 && sttLocalProviders.length === 0
+              }
+              styles={{
+                input: {
+                  backgroundColor: "var(--bg-elevated)",
+                  borderColor: "var(--border-default)",
+                  color: "var(--text-primary)",
+                  minWidth: 200,
+                },
+              }}
+            />
+          )}
+        </div>
+      </div>
 
-			{/* STT Model - only show if provider has models */}
-			{sttModelOptions.length > 0 && (
-				<div className="settings-row">
-					<div>
-						<p className="settings-label">STT Model</p>
-						<p className="settings-description">
-							Model to use for transcription
-						</p>
-					</div>
-					<Select
-						data={sttModelOptions}
-						value={settings?.stt_model ?? sttModelOptions[0]?.value ?? null}
-						onChange={handleSTTModelChange}
-						placeholder="Select model"
-						withCheckIcon={false}
-						styles={{
-							input: {
-								backgroundColor: "var(--bg-elevated)",
-								borderColor: "var(--border-default)",
-								color: "var(--text-primary)",
-								minWidth: 200,
-							},
-						}}
-					/>
-				</div>
-			)}
+      {/* STT Model - only show if provider has models */}
+      {sttModelOptions.length > 0 && (
+        <div className="settings-row">
+          <div>
+            <p className="settings-label">STT Model</p>
+            <p className="settings-description">
+              Model to use for transcription
+            </p>
+          </div>
+          <Select
+            data={sttModelOptions}
+            value={settings?.stt_model ?? sttModelOptions[0]?.value ?? null}
+            onChange={handleSTTModelChange}
+            placeholder="Select model"
+            withCheckIcon={false}
+            styles={{
+              input: {
+                backgroundColor: "var(--bg-elevated)",
+                borderColor: "var(--border-default)",
+                color: "var(--text-primary)",
+                minWidth: 200,
+              },
+            }}
+          />
+        </div>
+      )}
 
-			{/* LLM Provider */}
-			<div className="settings-row">
-				<div>
-					<p className="settings-label">Language Model Provider</p>
-					<p className="settings-description">AI service for text formatting</p>
-				</div>
-				<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-					{isLoadingProviderData ? (
-						<Loader size="sm" color="gray" />
-					) : (
-						<Select
-							data={llmProviderOptions}
-							value={settings?.llm_provider ?? null}
-							onChange={handleLLMProviderChange}
-							placeholder="Select provider"
-							withCheckIcon={false}
-							disabled={
-								llmCloudProviders.length === 0 && llmLocalProviders.length === 0
-							}
-							styles={{
-								input: {
-									backgroundColor: "var(--bg-elevated)",
-									borderColor: "var(--border-default)",
-									color: "var(--text-primary)",
-									minWidth: 200,
-								},
-							}}
-						/>
-					)}
-				</div>
-			</div>
+      {/* LLM Provider */}
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Language Model Provider</p>
+          <p className="settings-description">AI service for text formatting</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {isLoadingProviderData ? (
+            <Loader size="sm" color="gray" />
+          ) : (
+            <Select
+              data={llmProviderOptions}
+              value={settings?.llm_provider ?? null}
+              onChange={handleLLMProviderChange}
+              placeholder="Select provider"
+              withCheckIcon={false}
+              disabled={
+                llmCloudProviders.length === 0 && llmLocalProviders.length === 0
+              }
+              styles={{
+                input: {
+                  backgroundColor: "var(--bg-elevated)",
+                  borderColor: "var(--border-default)",
+                  color: "var(--text-primary)",
+                  minWidth: 200,
+                },
+              }}
+            />
+          )}
+        </div>
+      </div>
 
-			{/* LLM Model - only show if provider has models */}
-			{llmModelOptions.length > 0 && (
-				<div className="settings-row">
-					<div>
-						<p className="settings-label">LLM Model</p>
-						<p className="settings-description">
-							Model to use for text formatting
-						</p>
-					</div>
-					<Select
-						data={llmModelOptions}
-						value={settings?.llm_model ?? llmModelOptions[0]?.value ?? null}
-						onChange={handleLLMModelChange}
-						placeholder="Select model"
-						withCheckIcon={false}
-						styles={{
-							input: {
-								backgroundColor: "var(--bg-elevated)",
-								borderColor: "var(--border-default)",
-								color: "var(--text-primary)",
-								minWidth: 200,
-							},
-						}}
-					/>
-				</div>
-			)}
+      {/* LLM Model - only show if provider has models */}
+      {llmModelOptions.length > 0 && (
+        <div className="settings-row">
+          <div>
+            <p className="settings-label">Rewrite LLM Model</p>
+            <p className="settings-description">
+              LLM Model used to rewrite the transcription.
+            </p>
+          </div>
+          <Select
+            data={llmModelOptions}
+            value={settings?.llm_model ?? llmModelOptions[0]?.value ?? null}
+            onChange={handleLLMModelChange}
+            placeholder="Select model"
+            withCheckIcon={false}
+            styles={{
+              input: {
+                backgroundColor: "var(--bg-elevated)",
+                borderColor: "var(--border-default)",
+                color: "var(--text-primary)",
+                minWidth: 200,
+              },
+            }}
+          />
+        </div>
+      )}
 
-			{/* STT Timeout */}
-			<div className="settings-row">
-				<div style={{ flex: 1 }}>
-					<p className="settings-label">STT Timeout</p>
-					<p className="settings-description">
-						Increase if nothing is getting transcribed
-					</p>
-					<div
-						style={{
-							marginTop: 12,
-							display: "flex",
-							alignItems: "center",
-							gap: 12,
-						}}
-					>
-						<Slider
-							value={sliderValue}
-							onChange={setSliderValue}
-							onChangeEnd={handleSTTTimeoutChange}
-							min={0.5}
-							max={3.0}
-							step={0.1}
-							marks={[
-								{ value: 0.5, label: "0.5s" },
-								{ value: 3.0, label: "3.0s" },
-							]}
-							styles={{
-								root: { flex: 1 },
-								track: { backgroundColor: "var(--bg-elevated)" },
-								bar: { backgroundColor: "var(--accent-primary)" },
-								thumb: { borderColor: "var(--accent-primary)" },
-								markLabel: { color: "var(--text-secondary)", fontSize: 10 },
-							}}
-						/>
-						<Text size="xs" c="dimmed" style={{ minWidth: 32 }}>
-							{sliderValue.toFixed(1)}s
-						</Text>
-					</div>
-				</div>
-			</div>
-		</>
-	);
+      {/* STT Timeout */}
+      <div className="settings-row">
+        <div style={{ flex: 1 }}>
+          <p className="settings-label">STT Timeout</p>
+          <p className="settings-description">
+            Increase if nothing is getting transcribed
+          </p>
+          <div
+            style={{
+              marginTop: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <Slider
+              value={sliderValue}
+              onChange={setSliderValue}
+              onChangeEnd={handleSTTTimeoutChange}
+              min={0.5}
+              max={3.0}
+              step={0.1}
+              marks={[
+                { value: 0.5, label: "0.5s" },
+                { value: 3.0, label: "3.0s" },
+              ]}
+              styles={{
+                root: { flex: 1 },
+                track: { backgroundColor: "var(--bg-elevated)" },
+                bar: { backgroundColor: "var(--accent-primary)" },
+                thumb: { borderColor: "var(--accent-primary)" },
+                markLabel: { color: "var(--text-secondary)", fontSize: 10 },
+              }}
+            />
+            <Text size="xs" c="dimmed" style={{ minWidth: 32 }}>
+              {sliderValue.toFixed(1)}s
+            </Text>
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }

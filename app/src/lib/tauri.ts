@@ -76,21 +76,23 @@ function normalizeOutputMode(value: unknown): OutputMode {
 }
 
 export interface AppSettings {
-	toggle_hotkey: HotkeyConfig;
-	hold_hotkey: HotkeyConfig;
-	paste_last_hotkey: HotkeyConfig;
-	selected_mic_id: string | null;
-	sound_enabled: boolean;
-	cleanup_prompt_sections: CleanupPromptSections | null;
-	stt_provider: string | null;
-	stt_model: string | null;
-	llm_provider: string | null;
-	llm_model: string | null;
-	auto_mute_audio: boolean;
-	stt_timeout_seconds: number | null;
-	overlay_mode: OverlayMode;
-	widget_position: WidgetPosition;
-	output_mode: OutputMode;
+  toggle_hotkey: HotkeyConfig;
+  hold_hotkey: HotkeyConfig;
+  paste_last_hotkey: HotkeyConfig;
+  selected_mic_id: string | null;
+  sound_enabled: boolean;
+  // Global gate for the optional LLM rewrite step
+  rewrite_llm_enabled: boolean;
+  cleanup_prompt_sections: CleanupPromptSections | null;
+  stt_provider: string | null;
+  stt_model: string | null;
+  llm_provider: string | null;
+  llm_model: string | null;
+  auto_mute_audio: boolean;
+  stt_timeout_seconds: number | null;
+  overlay_mode: OverlayMode;
+  widget_position: WidgetPosition;
+  output_mode: OutputMode;
 }
 
 // ============================================================================
@@ -196,254 +198,262 @@ export function validateHotkeyNotDuplicate(
 // ============================================================================
 
 export const tauriAPI = {
-	async typeText(text: string): Promise<TypeTextResult> {
-		try {
-			await invoke("type_text", { text });
-			return { success: true };
-		} catch (error) {
-			return { success: false, error: String(error) };
-		}
-	},
+  async typeText(text: string): Promise<TypeTextResult> {
+    try {
+      await invoke("type_text", { text });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
 
-	async onStartRecording(callback: () => void): Promise<UnlistenFn> {
-		return listen("recording-start", callback);
-	},
+  async onStartRecording(callback: () => void): Promise<UnlistenFn> {
+    return listen("recording-start", callback);
+  },
 
-	async onStopRecording(callback: () => void): Promise<UnlistenFn> {
-		return listen("recording-stop", callback);
-	},
+  async onStopRecording(callback: () => void): Promise<UnlistenFn> {
+    return listen("recording-stop", callback);
+  },
 
-	// Settings API - using store plugin directly
-	async getSettings(): Promise<AppSettings> {
-		const store = await getStore();
-		return {
-			toggle_hotkey:
-				(await store.get<HotkeyConfig>("toggle_hotkey")) ?? defaultToggleHotkey,
-			hold_hotkey:
-				(await store.get<HotkeyConfig>("hold_hotkey")) ?? defaultHoldHotkey,
-			paste_last_hotkey:
-				(await store.get<HotkeyConfig>("paste_last_hotkey")) ??
-				defaultPasteLastHotkey,
-			selected_mic_id:
-				(await store.get<string | null>("selected_mic_id")) ?? null,
-			sound_enabled: (await store.get<boolean>("sound_enabled")) ?? true,
-			cleanup_prompt_sections:
-				(await store.get<CleanupPromptSections | null>(
-					"cleanup_prompt_sections",
-				)) ?? null,
-			stt_provider: (await store.get<string | null>("stt_provider")) ?? null,
-			stt_model: (await store.get<string | null>("stt_model")) ?? null,
-			llm_provider: (await store.get<string | null>("llm_provider")) ?? null,
-			llm_model: (await store.get<string | null>("llm_model")) ?? null,
-			auto_mute_audio: (await store.get<boolean>("auto_mute_audio")) ?? false,
-			stt_timeout_seconds:
-				(await store.get<number | null>("stt_timeout_seconds")) ?? null,
-			overlay_mode: (await store.get<OverlayMode>("overlay_mode")) ?? "always",
-			widget_position:
-				(await store.get<WidgetPosition>("widget_position")) ?? "bottom-right",
-			output_mode: normalizeOutputMode(await store.get("output_mode")),
-		};
-	},
+  // Settings API - using store plugin directly
+  async getSettings(): Promise<AppSettings> {
+    const store = await getStore();
+    return {
+      toggle_hotkey:
+        (await store.get<HotkeyConfig>("toggle_hotkey")) ?? defaultToggleHotkey,
+      hold_hotkey:
+        (await store.get<HotkeyConfig>("hold_hotkey")) ?? defaultHoldHotkey,
+      paste_last_hotkey:
+        (await store.get<HotkeyConfig>("paste_last_hotkey")) ??
+        defaultPasteLastHotkey,
+      selected_mic_id:
+        (await store.get<string | null>("selected_mic_id")) ?? null,
+      sound_enabled: (await store.get<boolean>("sound_enabled")) ?? true,
+      rewrite_llm_enabled:
+        (await store.get<boolean>("rewrite_llm_enabled")) ?? false,
+      cleanup_prompt_sections:
+        (await store.get<CleanupPromptSections | null>(
+          "cleanup_prompt_sections"
+        )) ?? null,
+      stt_provider: (await store.get<string | null>("stt_provider")) ?? null,
+      stt_model: (await store.get<string | null>("stt_model")) ?? null,
+      llm_provider: (await store.get<string | null>("llm_provider")) ?? null,
+      llm_model: (await store.get<string | null>("llm_model")) ?? null,
+      auto_mute_audio: (await store.get<boolean>("auto_mute_audio")) ?? false,
+      stt_timeout_seconds:
+        (await store.get<number | null>("stt_timeout_seconds")) ?? null,
+      overlay_mode: (await store.get<OverlayMode>("overlay_mode")) ?? "always",
+      widget_position:
+        (await store.get<WidgetPosition>("widget_position")) ?? "bottom-right",
+      output_mode: normalizeOutputMode(await store.get("output_mode")),
+    };
+  },
 
-	async updateToggleHotkey(hotkey: HotkeyConfig): Promise<void> {
-		const store = await getStore();
-		await store.set("toggle_hotkey", hotkey);
-		await store.save();
-	},
+  async updateToggleHotkey(hotkey: HotkeyConfig): Promise<void> {
+    const store = await getStore();
+    await store.set("toggle_hotkey", hotkey);
+    await store.save();
+  },
 
-	async updateHoldHotkey(hotkey: HotkeyConfig): Promise<void> {
-		const store = await getStore();
-		await store.set("hold_hotkey", hotkey);
-		await store.save();
-	},
+  async updateHoldHotkey(hotkey: HotkeyConfig): Promise<void> {
+    const store = await getStore();
+    await store.set("hold_hotkey", hotkey);
+    await store.save();
+  },
 
-	async updatePasteLastHotkey(hotkey: HotkeyConfig): Promise<void> {
-		const store = await getStore();
-		await store.set("paste_last_hotkey", hotkey);
-		await store.save();
-	},
+  async updatePasteLastHotkey(hotkey: HotkeyConfig): Promise<void> {
+    const store = await getStore();
+    await store.set("paste_last_hotkey", hotkey);
+    await store.save();
+  },
 
-	async updateSelectedMic(micId: string | null): Promise<void> {
-		const store = await getStore();
-		await store.set("selected_mic_id", micId);
-		await store.save();
-	},
+  async updateSelectedMic(micId: string | null): Promise<void> {
+    const store = await getStore();
+    await store.set("selected_mic_id", micId);
+    await store.save();
+  },
 
-	async updateSoundEnabled(enabled: boolean): Promise<void> {
-		const store = await getStore();
-		await store.set("sound_enabled", enabled);
-		await store.save();
-	},
+  async updateSoundEnabled(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("sound_enabled", enabled);
+    await store.save();
+  },
 
-	async updateCleanupPromptSections(
-		sections: CleanupPromptSections | null,
-	): Promise<void> {
-		const store = await getStore();
-		await store.set("cleanup_prompt_sections", sections);
-		await store.save();
-	},
+  async updateRewriteLlmEnabled(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("rewrite_llm_enabled", enabled);
+    await store.save();
+  },
 
-	async updateSTTProvider(provider: string | null): Promise<void> {
-		const store = await getStore();
-		await store.set("stt_provider", provider);
-		await store.save();
-	},
+  async updateCleanupPromptSections(
+    sections: CleanupPromptSections | null
+  ): Promise<void> {
+    const store = await getStore();
+    await store.set("cleanup_prompt_sections", sections);
+    await store.save();
+  },
 
-	async updateSTTModel(model: string | null): Promise<void> {
-		const store = await getStore();
-		await store.set("stt_model", model);
-		await store.save();
-	},
+  async updateSTTProvider(provider: string | null): Promise<void> {
+    const store = await getStore();
+    await store.set("stt_provider", provider);
+    await store.save();
+  },
 
-	async updateLLMProvider(provider: string | null): Promise<void> {
-		const store = await getStore();
-		await store.set("llm_provider", provider);
-		await store.save();
-	},
+  async updateSTTModel(model: string | null): Promise<void> {
+    const store = await getStore();
+    await store.set("stt_model", model);
+    await store.save();
+  },
 
-	async updateLLMModel(model: string | null): Promise<void> {
-		const store = await getStore();
-		await store.set("llm_model", model);
-		await store.save();
-	},
+  async updateLLMProvider(provider: string | null): Promise<void> {
+    const store = await getStore();
+    await store.set("llm_provider", provider);
+    await store.save();
+  },
 
-	async updateAutoMuteAudio(enabled: boolean): Promise<void> {
-		const store = await getStore();
-		await store.set("auto_mute_audio", enabled);
-		await store.save();
-	},
+  async updateLLMModel(model: string | null): Promise<void> {
+    const store = await getStore();
+    await store.set("llm_model", model);
+    await store.save();
+  },
 
-	async updateSTTTimeout(timeoutSeconds: number | null): Promise<void> {
-		const store = await getStore();
-		await store.set("stt_timeout_seconds", timeoutSeconds);
-		await store.save();
-	},
+  async updateAutoMuteAudio(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("auto_mute_audio", enabled);
+    await store.save();
+  },
 
-	async updateOverlayMode(mode: OverlayMode): Promise<void> {
-		const store = await getStore();
-		await store.set("overlay_mode", mode);
-		await store.save();
-		// Apply the mode immediately
-		await invoke("set_overlay_mode", { mode });
-	},
+  async updateSTTTimeout(timeoutSeconds: number | null): Promise<void> {
+    const store = await getStore();
+    await store.set("stt_timeout_seconds", timeoutSeconds);
+    await store.save();
+  },
 
-	async updateWidgetPosition(position: WidgetPosition): Promise<void> {
-		const store = await getStore();
-		await store.set("widget_position", position);
-		await store.save();
-		// Apply the position immediately
-		await invoke("set_widget_position", { position });
-	},
+  async updateOverlayMode(mode: OverlayMode): Promise<void> {
+    const store = await getStore();
+    await store.set("overlay_mode", mode);
+    await store.save();
+    // Apply the mode immediately
+    await invoke("set_overlay_mode", { mode });
+  },
 
-	async updateOutputMode(mode: OutputMode): Promise<void> {
-		const store = await getStore();
-		await store.set("output_mode", mode);
-		await store.save();
-	},
+  async updateWidgetPosition(position: WidgetPosition): Promise<void> {
+    const store = await getStore();
+    await store.set("widget_position", position);
+    await store.save();
+    // Apply the position immediately
+    await invoke("set_widget_position", { position });
+  },
 
-	async isAudioMuteSupported(): Promise<boolean> {
-		return invoke("is_audio_mute_supported");
-	},
+  async updateOutputMode(mode: OutputMode): Promise<void> {
+    const store = await getStore();
+    await store.set("output_mode", mode);
+    await store.save();
+  },
 
-	// API Key management
-	async hasApiKey(storeKey: string): Promise<boolean> {
-		const store = await getStore();
-		const value = await store.get<string>(storeKey);
-		return value !== null && value !== undefined && value.length > 0;
-	},
+  async isAudioMuteSupported(): Promise<boolean> {
+    return invoke("is_audio_mute_supported");
+  },
 
-	async setApiKey(storeKey: string, apiKey: string): Promise<void> {
-		const store = await getStore();
-		await store.set(storeKey, apiKey);
-		await store.save();
-	},
+  // API Key management
+  async hasApiKey(storeKey: string): Promise<boolean> {
+    const store = await getStore();
+    const value = await store.get<string>(storeKey);
+    return value !== null && value !== undefined && value.length > 0;
+  },
 
-	async clearApiKey(storeKey: string): Promise<void> {
-		const store = await getStore();
-		await store.delete(storeKey);
-		await store.save();
-	},
+  async setApiKey(storeKey: string, apiKey: string): Promise<void> {
+    const store = await getStore();
+    await store.set(storeKey, apiKey);
+    await store.save();
+  },
 
-	async resetHotkeysToDefaults(): Promise<void> {
-		const store = await getStore();
-		await store.set("toggle_hotkey", defaultToggleHotkey);
-		await store.set("hold_hotkey", defaultHoldHotkey);
-		await store.set("paste_last_hotkey", defaultPasteLastHotkey);
-		await store.save();
-	},
+  async clearApiKey(storeKey: string): Promise<void> {
+    const store = await getStore();
+    await store.delete(storeKey);
+    await store.save();
+  },
 
-	async registerShortcuts(): Promise<void> {
-		return invoke("register_shortcuts");
-	},
+  async resetHotkeysToDefaults(): Promise<void> {
+    const store = await getStore();
+    await store.set("toggle_hotkey", defaultToggleHotkey);
+    await store.set("hold_hotkey", defaultHoldHotkey);
+    await store.set("paste_last_hotkey", defaultPasteLastHotkey);
+    await store.save();
+  },
 
-	async unregisterShortcuts(): Promise<void> {
-		return invoke("unregister_shortcuts");
-	},
+  async registerShortcuts(): Promise<void> {
+    return invoke("register_shortcuts");
+  },
 
-	// History API
-	async addHistoryEntry(text: string): Promise<HistoryEntry> {
-		return invoke("add_history_entry", { text });
-	},
+  async unregisterShortcuts(): Promise<void> {
+    return invoke("unregister_shortcuts");
+  },
 
-	async getHistory(limit?: number): Promise<HistoryEntry[]> {
-		return invoke("get_history", { limit });
-	},
+  // History API
+  async addHistoryEntry(text: string): Promise<HistoryEntry> {
+    return invoke("add_history_entry", { text });
+  },
 
-	async deleteHistoryEntry(id: string): Promise<boolean> {
-		return invoke("delete_history_entry", { id });
-	},
+  async getHistory(limit?: number): Promise<HistoryEntry[]> {
+    return invoke("get_history", { limit });
+  },
 
-	async clearHistory(): Promise<void> {
-		return invoke("clear_history");
-	},
+  async deleteHistoryEntry(id: string): Promise<boolean> {
+    return invoke("delete_history_entry", { id });
+  },
 
-	// Overlay API
-	async resizeOverlay(width: number, height: number): Promise<void> {
-		return invoke("resize_overlay", { width, height });
-	},
+  async clearHistory(): Promise<void> {
+    return invoke("clear_history");
+  },
 
-	async startDragging(): Promise<void> {
-		const window = getCurrentWindow();
-		return window.startDragging();
-	},
+  // Overlay API
+  async resizeOverlay(width: number, height: number): Promise<void> {
+    return invoke("resize_overlay", { width, height });
+  },
 
-	// Connection state sync between windows
-	async emitConnectionState(state: ConnectionState): Promise<void> {
-		return emit("connection-state-changed", { state });
-	},
+  async startDragging(): Promise<void> {
+    const window = getCurrentWindow();
+    return window.startDragging();
+  },
 
-	async onConnectionStateChanged(
-		callback: (state: ConnectionState) => void,
-	): Promise<UnlistenFn> {
-		return listen<{ state: ConnectionState }>(
-			"connection-state-changed",
-			(event) => {
-				callback(event.payload.state);
-			},
-		);
-	},
+  // Connection state sync between windows
+  async emitConnectionState(state: ConnectionState): Promise<void> {
+    return emit("connection-state-changed", { state });
+  },
 
-	// History sync between windows
-	async emitHistoryChanged(): Promise<void> {
-		return emit("history-changed", {});
-	},
+  async onConnectionStateChanged(
+    callback: (state: ConnectionState) => void
+  ): Promise<UnlistenFn> {
+    return listen<{ state: ConnectionState }>(
+      "connection-state-changed",
+      (event) => {
+        callback(event.payload.state);
+      }
+    );
+  },
 
-	async onHistoryChanged(callback: () => void): Promise<UnlistenFn> {
-		return listen("history-changed", () => {
-			callback();
-		});
-	},
+  // History sync between windows
+  async emitHistoryChanged(): Promise<void> {
+    return emit("history-changed", {});
+  },
 
-	// Settings sync between windows (main -> overlay)
-	async emitSettingsChanged(): Promise<void> {
-		return emit("settings-changed", {});
-	},
+  async onHistoryChanged(callback: () => void): Promise<UnlistenFn> {
+    return listen("history-changed", () => {
+      callback();
+    });
+  },
 
-	async onSettingsChanged(callback: () => void): Promise<UnlistenFn> {
-		return listen("settings-changed", () => {
-			callback();
-		});
-	},
+  // Settings sync between windows (main -> overlay)
+  async emitSettingsChanged(): Promise<void> {
+    return emit("settings-changed", {});
+  },
+
+  async onSettingsChanged(callback: () => void): Promise<UnlistenFn> {
+    return listen("settings-changed", () => {
+      callback();
+    });
+  },
 };
 
 // ============================================================================

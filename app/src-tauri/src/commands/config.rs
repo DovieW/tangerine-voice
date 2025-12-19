@@ -278,6 +278,13 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
 
     // Read LLM settings from store
     // NOTE: If the user has not selected an LLM provider yet, keep LLM disabled.
+    let rewrite_llm_enabled: bool = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("rewrite_llm_enabled"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(false);
+
     let llm_provider: Option<String> = app
         .store("settings.json")
         .ok()
@@ -302,11 +309,12 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         })
         .unwrap_or_default();
 
-    let llm_enabled = match llm_provider.as_deref() {
-        None => false,
-        Some("ollama") => true, // local
-        Some(_) => !llm_api_key.is_empty(),
-    };
+    let llm_enabled = rewrite_llm_enabled
+        && match llm_provider.as_deref() {
+            None => false,
+            Some("ollama") => true, // local
+            Some(_) => !llm_api_key.is_empty(),
+        };
 
     // Read VAD settings from store
     let vad_settings: VadSettings = app

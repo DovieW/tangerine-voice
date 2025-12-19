@@ -194,61 +194,61 @@ function HomeView() {
 
 function SettingsView() {
 	return (
-		<div className="main-content">
-			<header className="animate-in" style={{ marginBottom: 32 }}>
-				<Title order={1} mb={4}>
-					Settings
-				</Title>
-				<Text c="dimmed" size="sm">
-					Configure your preferences
-				</Text>
-			</header>
+    <div className="main-content">
+      <header className="animate-in" style={{ marginBottom: 32 }}>
+        <Title order={1} mb={4}>
+          Settings
+        </Title>
+        <Text c="dimmed" size="sm">
+          Configure your preferences
+        </Text>
+      </header>
 
-			<Tabs
-				defaultValue="api-keys"
-				classNames={{ root: "settings-tabs" }}
-				keepMounted={false}
-			>
-				<Tabs.List>
-					<Tabs.Tab value="api-keys">API Keys</Tabs.Tab>
-					<Tabs.Tab value="providers">Providers</Tabs.Tab>
-					<Tabs.Tab value="audio">Audio &amp; Overlay</Tabs.Tab>
-					<Tabs.Tab value="hotkeys">Hotkeys</Tabs.Tab>
-					<Tabs.Tab value="prompts">Prompts</Tabs.Tab>
-				</Tabs.List>
+      <Tabs
+        defaultValue="api-keys"
+        classNames={{ root: "settings-tabs" }}
+        keepMounted={false}
+      >
+        <Tabs.List>
+          <Tabs.Tab value="api-keys">API Keys</Tabs.Tab>
+          <Tabs.Tab value="providers">Providers</Tabs.Tab>
+          <Tabs.Tab value="audio">Audio &amp; Overlay</Tabs.Tab>
+          <Tabs.Tab value="hotkeys">Hotkeys</Tabs.Tab>
+          <Tabs.Tab value="prompts">Rewrite</Tabs.Tab>
+        </Tabs.List>
 
-				<Tabs.Panel value="api-keys" pt="md">
-					<div className="settings-card">
-						<ApiKeysSettings />
-					</div>
-				</Tabs.Panel>
+        <Tabs.Panel value="api-keys" pt="md">
+          <div className="settings-card">
+            <ApiKeysSettings />
+          </div>
+        </Tabs.Panel>
 
-				<Tabs.Panel value="providers" pt="md">
-					<div className="settings-card">
-						<ProvidersSettings />
-					</div>
-				</Tabs.Panel>
+        <Tabs.Panel value="providers" pt="md">
+          <div className="settings-card">
+            <ProvidersSettings />
+          </div>
+        </Tabs.Panel>
 
-				<Tabs.Panel value="audio" pt="md">
-					<div className="settings-card">
-						<AudioSettings />
-					</div>
-				</Tabs.Panel>
+        <Tabs.Panel value="audio" pt="md">
+          <div className="settings-card">
+            <AudioSettings />
+          </div>
+        </Tabs.Panel>
 
-				<Tabs.Panel value="hotkeys" pt="md">
-					<div className="settings-card">
-						<HotkeySettings />
-					</div>
-				</Tabs.Panel>
+        <Tabs.Panel value="hotkeys" pt="md">
+          <div className="settings-card">
+            <HotkeySettings />
+          </div>
+        </Tabs.Panel>
 
-				<Tabs.Panel value="prompts" pt="md">
-					<div className="settings-card">
-						<PromptSettings />
-					</div>
-				</Tabs.Panel>
-			</Tabs>
-		</div>
-	);
+        <Tabs.Panel value="prompts" pt="md">
+          <div className="settings-card">
+            <PromptSettings />
+          </div>
+        </Tabs.Panel>
+      </Tabs>
+    </div>
+  );
 }
 
 export default function App() {

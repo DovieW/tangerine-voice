@@ -878,6 +878,7 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         get_setting_from_store(app, "vad_settings", settings::VadSettings::default());
 
     // Read LLM settings from store
+    let rewrite_llm_enabled: bool = get_setting_from_store(app, "rewrite_llm_enabled", false);
     let llm_provider: Option<String> = get_setting_from_store(app, "llm_provider", None);
     let llm_model: Option<String> = get_setting_from_store(app, "llm_model", None);
 
@@ -889,11 +890,12 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         })
         .unwrap_or_default();
 
-    let llm_enabled = match llm_provider.as_deref() {
-        None => false,
-        Some("ollama") => true,
-        Some(_) => !llm_api_key.is_empty(),
-    };
+    let llm_enabled = rewrite_llm_enabled
+        && match llm_provider.as_deref() {
+            None => false,
+            Some("ollama") => true,
+            Some(_) => !llm_api_key.is_empty(),
+        };
 
     let config = pipeline::PipelineConfig {
         stt_provider,
