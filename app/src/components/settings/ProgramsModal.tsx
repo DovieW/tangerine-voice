@@ -10,6 +10,7 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { Crosshair, Plus, RotateCcw, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useSettings,
@@ -68,6 +69,26 @@ export function ProfileConfigModal({
 
   const [localName, setLocalName] = useState<string>("");
   const [localPaths, setLocalPaths] = useState<string[]>([]);
+
+  const [confirmDialog, setConfirmDialog] = useState<null | {
+    title: string;
+    description?: ReactNode;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    confirmColor?: string;
+    onConfirm: () => void;
+  }>(null);
+
+  const openConfirmDialog = (args: {
+    title: string;
+    description?: ReactNode;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    confirmColor?: string;
+    onConfirm: () => void;
+  }) => {
+    setConfirmDialog(args);
+  };
 
   useEffect(() => {
     if (!selectedProfile) {
@@ -131,18 +152,29 @@ export function ProfileConfigModal({
     if (!selectedProfile) return;
 
     const name = selectedProfile.name.trim() || "this profile";
-    if (!window.confirm(`Delete ${name}? This cannot be undone.`)) return;
-
-    const next = profiles.filter((p) => p.id !== selectedProfile.id);
-    updateRewriteProgramPromptProfiles.mutate(next, {
-      onSuccess: () => {
-        tauriAPI.emitSettingsChanged();
-        // If we just deleted the currently selected profile, close the modal
-        // and return to Default scope.
-        if (editingProfileId === selectedProfile.id) {
-          onEditingProfileChange("default");
-          onClose();
-        }
+    openConfirmDialog({
+      title: `Delete ${name}?`,
+      description: (
+        <Text size="sm" c="dimmed" style={{ lineHeight: 1.4 }}>
+          This cannot be undone.
+        </Text>
+      ),
+      confirmLabel: "Delete profile",
+      cancelLabel: "Cancel",
+      confirmColor: "red",
+      onConfirm: () => {
+        const next = profiles.filter((p) => p.id !== selectedProfile.id);
+        updateRewriteProgramPromptProfiles.mutate(next, {
+          onSuccess: () => {
+            tauriAPI.emitSettingsChanged();
+            // If we just deleted the currently selected profile, close the modal
+            // and return to Default scope.
+            if (editingProfileId === selectedProfile.id) {
+              onEditingProfileChange("default");
+              onClose();
+            }
+          },
+        });
       },
     });
   };
@@ -151,29 +183,38 @@ export function ProfileConfigModal({
     if (!selectedProfile) return;
 
     const name = selectedProfile.name.trim() || "this profile";
-    const ok = window.confirm(
-      `Disable all overrides for ${name}?\n\nThis will reset the profile to inherit all settings from Default. Program matching will remain unchanged.`
-    );
-    if (!ok) return;
+    openConfirmDialog({
+      title: `Disable all overrides for ${name}?`,
+      description: (
+        <Text size="sm" c="dimmed" style={{ lineHeight: 1.4 }}>
+          This will reset the profile to inherit all settings from Default.
+          Program matching will remain unchanged.
+        </Text>
+      ),
+      confirmLabel: "Disable overrides",
+      cancelLabel: "Cancel",
+      confirmColor: "gray",
+      onConfirm: () => {
+        saveProfileMetadata({
+          // Prompts
+          cleanup_prompt_sections: null,
 
-    saveProfileMetadata({
-      // Prompts
-      cleanup_prompt_sections: null,
+          // AI settings
+          stt_provider: null,
+          stt_model: null,
+          stt_timeout_seconds: null,
+          llm_provider: null,
+          llm_model: null,
+          rewrite_llm_enabled: null,
 
-      // AI settings
-      stt_provider: null,
-      stt_model: null,
-      stt_timeout_seconds: null,
-      llm_provider: null,
-      llm_model: null,
-      rewrite_llm_enabled: null,
-
-      // Audio & Overlay settings
-      sound_enabled: null,
-      auto_mute_audio: null,
-      overlay_mode: null,
-      widget_position: null,
-      output_mode: null,
+          // Audio & Overlay settings
+          sound_enabled: null,
+          auto_mute_audio: null,
+          overlay_mode: null,
+          widget_position: null,
+          output_mode: null,
+        });
+      },
     });
   };
 
@@ -394,37 +435,34 @@ export function ProfileConfigModal({
               </Group>
             ))}
 
-            <Group justify="space-between" mt="md">
-              {!hasAnyConfiguredProgram ? (
-                <div style={{ fontSize: 12, opacity: 0.7 }}>
-                  Tip: you can use the crosshair to pick from open apps.
-                </div>
-              ) : (
-                <div />
-              )}
-              <Group gap={8}>
-                <Button
-                  size="xs"
-                  variant="light"
-                  color="gray"
-                  leftSection={<RotateCcw size={14} />}
-                  onClick={disableAllOverridesForSelectedProfile}
-                  disabled={isBusy}
-                >
-                  Disable all overrides
-                </Button>
+            {!hasAnyConfiguredProgram ? (
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 16 }}>
+                Tip: you can use the crosshair to pick from open apps.
+              </div>
+            ) : null}
 
-                <Button
-                  size="xs"
-                  variant="light"
-                  color="red"
-                  leftSection={<Trash2 size={14} />}
-                  onClick={deleteSelectedProfile}
-                  disabled={isBusy}
-                >
-                  Delete profile
-                </Button>
-              </Group>
+            <Group justify="flex-end" mt="md" gap={8}>
+              <Button
+                size="xs"
+                variant="light"
+                color="gray"
+                leftSection={<RotateCcw size={14} />}
+                onClick={disableAllOverridesForSelectedProfile}
+                disabled={isBusy}
+              >
+                Disable all overrides
+              </Button>
+
+              <Button
+                size="xs"
+                variant="light"
+                color="red"
+                leftSection={<Trash2 size={14} />}
+                onClick={deleteSelectedProfile}
+                disabled={isBusy}
+              >
+                Delete profile
+              </Button>
             </Group>
           </>
         ) : null}
@@ -464,6 +502,31 @@ export function ProfileConfigModal({
             }}
           />
         )}
+      </Modal>
+
+      <Modal
+        opened={confirmDialog !== null}
+        onClose={() => setConfirmDialog(null)}
+        title={confirmDialog?.title ?? ""}
+        centered
+        zIndex={1000}
+      >
+        {confirmDialog?.description}
+        <Group justify="flex-end" mt="md" gap="sm">
+          <Button variant="default" onClick={() => setConfirmDialog(null)}>
+            {confirmDialog?.cancelLabel ?? "Cancel"}
+          </Button>
+          <Button
+            color={confirmDialog?.confirmColor ?? "gray"}
+            onClick={() => {
+              const confirm = confirmDialog?.onConfirm;
+              setConfirmDialog(null);
+              confirm?.();
+            }}
+          >
+            {confirmDialog?.confirmLabel ?? "Confirm"}
+          </Button>
+        </Group>
       </Modal>
     </>
   );
