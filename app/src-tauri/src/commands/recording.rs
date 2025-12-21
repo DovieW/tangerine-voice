@@ -448,6 +448,7 @@ pub fn pipeline_get_state(
         PipelineState::Idle => "idle",
         PipelineState::Recording => "recording",
         PipelineState::Transcribing => "transcribing",
+        PipelineState::Rewriting => "rewriting",
         PipelineState::Error => "error",
     };
     Ok(state_str.to_string())

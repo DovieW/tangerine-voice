@@ -13,7 +13,22 @@ import "./app.css";
 /**
  * Pipeline state machine states (matches Rust PipelineState)
  */
-type PipelineState = "idle" | "recording" | "transcribing" | "error";
+type PipelineState =
+  | "idle"
+  | "recording"
+  | "transcribing"
+  | "rewriting"
+  | "error";
+
+function isPipelineState(value: string): value is PipelineState {
+  return (
+    value === "idle" ||
+    value === "recording" ||
+    value === "transcribing" ||
+    value === "rewriting" ||
+    value === "error"
+  );
+}
 
 type PipelineErrorPayload = {
   message: string;
@@ -97,6 +112,7 @@ function pipelineToConnectionState(state: PipelineState): ConnectionState {
     case "recording":
       return "recording";
     case "transcribing":
+    case "rewriting":
       return "processing";
     case "error":
       return "disconnected";
@@ -550,7 +566,11 @@ function RecordingControl() {
     const syncState = async () => {
       try {
         const state = await invoke<string>("pipeline_get_state");
-        setPipelineState(state as PipelineState);
+        if (isPipelineState(state)) {
+          setPipelineState(state);
+        } else {
+          setPipelineState("idle");
+        }
       } catch (error) {
         console.error("[Pipeline] Failed to get state:", error);
       }
@@ -602,6 +622,7 @@ function RecordingControl() {
     if (
       pipelineState === "recording" ||
       pipelineState === "transcribing" ||
+      pipelineState === "rewriting" ||
       pipelineState === "error"
     ) {
       setExpanded(true);
@@ -680,7 +701,11 @@ function RecordingControl() {
       return;
     }
 
-    if (pipelineState === "recording" || pipelineState === "transcribing") {
+    if (
+      pipelineState === "recording" ||
+      pipelineState === "transcribing" ||
+      pipelineState === "rewriting"
+    ) {
       requestAnimatedShow();
     }
   }, [pipelineState, requestAnimatedShow, settings?.overlay_mode]);
@@ -710,7 +735,12 @@ function RecordingControl() {
 
     if (settings?.overlay_mode !== "recording_only") return;
     if (pipelineState !== "idle") return;
-    if (prev === "recording" || prev === "transcribing" || prev === "error") {
+    if (
+      prev === "recording" ||
+      prev === "transcribing" ||
+      prev === "rewriting" ||
+      prev === "error"
+    ) {
       requestAnimatedHide();
     }
   }, [pipelineState, requestAnimatedHide, settings?.overlay_mode]);
@@ -957,9 +987,16 @@ function RecordingControl() {
     { filterTaps: true }
   );
 
-  const isLoading = pipelineState === "transcribing";
+  const isLoading =
+    pipelineState === "transcribing" || pipelineState === "rewriting";
   const isRecording = pipelineState === "recording";
   const isError = pipelineState === "error";
+  const centerPhaseText =
+    pipelineState === "rewriting"
+      ? "rewriting..."
+      : pipelineState === "transcribing"
+      ? "transcribing..."
+      : null;
 
   const renderIcon = () => {
     if (isLoading) return <Loader size="xs" color="white" />;
@@ -1023,6 +1060,10 @@ function RecordingControl() {
                   <div className="overlay-error-text" title={lastError.message}>
                     {lastError.message}
                   </div>
+                </div>
+              ) : centerPhaseText ? (
+                <div className="overlay-phase-text" aria-live="polite">
+                  {centerPhaseText}
                 </div>
               ) : (
                 <AudioWave

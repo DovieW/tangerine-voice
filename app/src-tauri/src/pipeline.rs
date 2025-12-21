@@ -169,6 +169,8 @@ pub enum PipelineState {
     Recording,
     /// Pipeline is transcribing recorded audio
     Transcribing,
+    /// Pipeline is rewriting/formatting text via an LLM (optional step)
+    Rewriting,
     /// Pipeline encountered an error (recoverable - can start new recording)
     Error,
 }
@@ -186,7 +188,10 @@ impl PipelineState {
 
     /// Check if this state allows cancellation
     pub fn can_cancel(&self) -> bool {
-        matches!(self, PipelineState::Recording | PipelineState::Transcribing)
+        matches!(
+            self,
+            PipelineState::Recording | PipelineState::Transcribing | PipelineState::Rewriting
+        )
     }
 }
 
@@ -1029,6 +1034,17 @@ impl SharedPipeline {
         let llm_model_used: Option<String> = llm_provider.as_ref().map(|p| p.model().to_string());
 
         let final_text = if let Some(llm) = llm_provider {
+            // Expose the optional LLM step as a distinct phase for UI.
+            {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|e| PipelineError::Lock(e.to_string()))?;
+                if inner.state == PipelineState::Transcribing {
+                    inner.state = PipelineState::Rewriting;
+                }
+            }
+
             log::info!("Pipeline: Applying LLM formatting");
 
             llm_outcome = LlmOutcome::Succeeded; // may be overwritten by fallback paths
@@ -1114,7 +1130,7 @@ impl SharedPipeline {
             if inner.state == PipelineState::Recording {
                 return Err(PipelineError::AlreadyRecording);
             }
-            if inner.state == PipelineState::Transcribing {
+            if matches!(inner.state, PipelineState::Transcribing | PipelineState::Rewriting) {
                 return Err(PipelineError::Lock("Pipeline already transcribing".to_string()));
             }
 
@@ -1318,6 +1334,17 @@ impl SharedPipeline {
         let llm_model_used: Option<String> = llm_provider.as_ref().map(|p| p.model().to_string());
 
         let final_text = if let Some(llm) = llm_provider {
+            // Expose the optional LLM step as a distinct phase for UI.
+            {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|e| PipelineError::Lock(e.to_string()))?;
+                if inner.state == PipelineState::Transcribing {
+                    inner.state = PipelineState::Rewriting;
+                }
+            }
+
             log::info!("Pipeline: Applying LLM formatting (retry)");
             llm_outcome = LlmOutcome::Succeeded;
             let llm_start = std::time::Instant::now();

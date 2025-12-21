@@ -198,6 +198,18 @@ body {
 	max-width: 180px;
 }
 
+.overlay-phase-text {
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: rgba(255, 255, 255, 0.88);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 180px;
+}
+
 .overlay-wave {
 	width: 100%;
 	max-width: 168px;
