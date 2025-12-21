@@ -5,11 +5,14 @@ import {
   type CleanupPromptSections,
   configAPI,
   type HotkeyConfig,
+  llmAPI,
   logsAPI,
   type OutputMode,
   type PlayingAudioHandling,
   type RewriteProgramPromptProfile,
+  sttAPI,
   tauriAPI,
+  type TestLlmRewriteResponse,
   validateHotkeyNotDuplicate,
   type WidgetPosition,
 } from "./tauri";
@@ -17,6 +20,34 @@ import {
 export function useTypeText() {
   return useMutation({
     mutationFn: (text: string) => invoke("type_text", { text }),
+  });
+}
+
+export function useTestLlmRewrite() {
+  return useMutation({
+    mutationFn: (params: {
+      transcript: string;
+      profileId?: string | null;
+    }): Promise<TestLlmRewriteResponse> => llmAPI.testLlmRewrite(params),
+  });
+}
+
+export function useTestSttTranscribeLastAudio() {
+  return useMutation({
+    mutationFn: (params: { profileId?: string | null }): Promise<string> =>
+      sttAPI.testTranscribeLastAudio(params),
+  });
+}
+
+export function useHasLastAudioForSttTest() {
+  return useQuery({
+    queryKey: ["sttLastAudioAvailable"],
+    queryFn: () => sttAPI.hasLastAudio(),
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    // Very cheap boolean check; polling keeps the UI in sync when the user
+    // records audio via hotkey while the settings page is open.
+    refetchInterval: 2000,
   });
 }
 

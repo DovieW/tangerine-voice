@@ -402,6 +402,26 @@ pub async fn pipeline_dictate(
     Ok(final_text)
 }
 
+/// Test transcription using the last captured audio (WAV bytes).
+///
+/// This is primarily used by the settings UI to validate STT provider/model/timeout.
+#[tauri::command]
+pub async fn pipeline_test_transcribe_last_audio(
+    pipeline: State<'_, SharedPipeline>,
+    profile_id: Option<String>,
+) -> Result<String, CommandError> {
+    pipeline
+        .transcribe_last_audio_for_profile(profile_id.as_deref())
+        .await
+        .map_err(CommandError::from)
+}
+
+/// Whether there is a previously captured audio buffer available for STT testing.
+#[tauri::command]
+pub fn pipeline_has_last_audio(pipeline: State<'_, SharedPipeline>) -> Result<bool, CommandError> {
+    Ok(pipeline.has_last_audio())
+}
+
 /// Full pipeline helper: Start recording if not recording, or stop and transcribe if recording
 #[tauri::command]
 pub async fn pipeline_toggle(

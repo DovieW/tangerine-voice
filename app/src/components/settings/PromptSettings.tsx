@@ -9,6 +9,7 @@ import {
   NumberInput,
   Select,
   Switch,
+  Textarea,
   Text,
   Tooltip,
 } from "@mantine/core";
@@ -18,6 +19,9 @@ import {
   useDefaultSections,
   useSettings,
   useAvailableProviders,
+  useTestLlmRewrite,
+  useTestSttTranscribeLastAudio,
+  useHasLastAudioForSttTest,
   useUpdateCleanupPromptSections,
   useUpdateLLMModel,
   useUpdateLLMProvider,
@@ -132,6 +136,9 @@ export function PromptSettings({
   const updateRewriteLlmEnabled = useUpdateRewriteLlmEnabled();
   const updateRewriteProgramPromptProfiles =
     useUpdateRewriteProgramPromptProfiles();
+  const testLlmRewrite = useTestLlmRewrite();
+  const testSttLastAudio = useTestSttTranscribeLastAudio();
+  const { data: hasLastAudioForSttTest } = useHasLastAudioForSttTest();
 
   // Default profile (global) provider settings
   const updateSTTProvider = useUpdateSTTProvider();
@@ -169,6 +176,20 @@ export function PromptSettings({
   const [localProfileSttTimeout, setLocalProfileSttTimeout] = useState<
     string | number
   >(DEFAULT_STT_TIMEOUT);
+
+  const [rewriteTestInput, setRewriteTestInput] = useState<string>(
+    "um hello there uh how are you"
+  );
+  const [rewriteTestOutput, setRewriteTestOutput] = useState<string>("");
+  const [rewriteTestMeta, setRewriteTestMeta] = useState<string>("");
+  const [rewriteTestError, setRewriteTestError] = useState<string>("");
+
+  const [sttTestOutput, setSttTestOutput] = useState<string>("");
+  const [sttTestError, setSttTestError] = useState<string>("");
+  const [sttTestDurationMs, setSttTestDurationMs] = useState<number | null>(
+    null
+  );
+  const sttTestStartRef = useRef<number | null>(null);
 
   const [resetDialog, setResetDialog] = useState<null | {
     title: string;
@@ -968,6 +989,139 @@ export function PromptSettings({
         </div>
       </div>
 
+      <div style={{ marginTop: 16, marginBottom: 16 }}>
+        <Accordion variant="separated" radius="md">
+          <Accordion.Item value={`${activeProfileId}-stt-test`}>
+            <Accordion.Control>
+              <div>
+                <p className="settings-label">Test transcription</p>
+                <p className="settings-description">
+                  Run STT on the last recorded audio to validate provider/model
+                  settings.
+                </p>
+              </div>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
+                >
+                  <Text size="sm" c="dimmed">
+                    {testSttLastAudio.isPending
+                      ? "Duration: running…"
+                      : sttTestDurationMs === null
+                      ? "Duration: —"
+                      : `Duration: ${(sttTestDurationMs / 1000).toFixed(2)}s`}
+                  </Text>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      marginLeft: "auto",
+                    }}
+                  >
+                    <Text size="sm" c="dimmed">
+                      Test with last created audio
+                    </Text>
+                    <Tooltip
+                      label={
+                        hasLastAudioForSttTest
+                          ? undefined
+                          : "No previous audio found. Record once (toggle/hold hotkey), then come back and click Test."
+                      }
+                      withArrow
+                      disabled={Boolean(hasLastAudioForSttTest)}
+                    >
+                      <span>
+                        <Button
+                          color="gray"
+                          loading={testSttLastAudio.isPending}
+                          disabled={!hasLastAudioForSttTest}
+                          onClick={() => {
+                            setSttTestError("");
+                            setSttTestOutput("");
+                            setSttTestDurationMs(null);
+                            sttTestStartRef.current = performance.now();
+
+                            testSttLastAudio.mutate(
+                              { profileId: activeProfileId },
+                              {
+                                onSuccess: (res) => {
+                                  const startedAt = sttTestStartRef.current;
+                                  sttTestStartRef.current = null;
+                                  if (typeof startedAt === "number") {
+                                    setSttTestDurationMs(
+                                      performance.now() - startedAt
+                                    );
+                                  }
+
+                                  setSttTestOutput(res);
+                                },
+                                onError: (err) => {
+                                  const startedAt = sttTestStartRef.current;
+                                  sttTestStartRef.current = null;
+                                  if (typeof startedAt === "number") {
+                                    setSttTestDurationMs(
+                                      performance.now() - startedAt
+                                    );
+                                  }
+
+                                  const message =
+                                    err instanceof Error
+                                      ? err.message
+                                      : String(err);
+                                  setSttTestError(message);
+                                },
+                              }
+                            );
+                          }}
+                        >
+                          Test
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  </div>
+                </div>
+
+                <div style={{ width: "100%" }}>
+                  {sttTestError ? (
+                    <Text size="sm" c="red" style={{ marginBottom: 8 }}>
+                      {sttTestError}
+                    </Text>
+                  ) : null}
+
+                  <Textarea
+                    value={sttTestOutput}
+                    readOnly
+                    placeholder="Transcript will appear here"
+                    autosize
+                    minRows={3}
+                    styles={{
+                      input: {
+                        backgroundColor: "var(--bg-elevated)",
+                        borderColor: "var(--border-default)",
+                        color: "var(--text-primary)",
+                        fontFamily: "monospace",
+                        fontSize: "13px",
+                      },
+                    }}
+                  />
+                </div>
+              </div>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+      </div>
+
       <Divider
         my="md"
         label="Language model"
@@ -1202,6 +1356,108 @@ export function PromptSettings({
 
       <div style={{ marginTop: 16 }}>
         <Accordion variant="separated" radius="md">
+          <Accordion.Item value={`${activeProfileId}-test-rewrite`}>
+            <Accordion.Control>
+              <div>
+                <p className="settings-label">Test rewrite</p>
+                <p className="settings-description">
+                  Paste a raw transcript and run it through the rewrite step.
+                </p>
+              </div>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                <Textarea
+                  value={rewriteTestInput}
+                  onChange={(e) => {
+                    setRewriteTestInput(e.currentTarget.value);
+                  }}
+                  placeholder="um like okay so today we're going to talk about..."
+                  autosize
+                  minRows={3}
+                  styles={{
+                    input: {
+                      backgroundColor: "var(--bg-elevated)",
+                      borderColor: "var(--border-default)",
+                      color: "var(--text-primary)",
+                      fontFamily: "monospace",
+                      fontSize: "13px",
+                    },
+                  }}
+                />
+
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <Button
+                    color="gray"
+                    loading={testLlmRewrite.isPending}
+                    disabled={rewriteTestInput.trim().length === 0}
+                    onClick={() => {
+                      setRewriteTestError("");
+                      setRewriteTestOutput("");
+                      setRewriteTestMeta("");
+
+                      testLlmRewrite.mutate(
+                        {
+                          transcript: rewriteTestInput,
+                          profileId: activeProfileId,
+                        },
+                        {
+                          onSuccess: (res) => {
+                            setRewriteTestOutput(res.output);
+                            setRewriteTestMeta(
+                              `${res.provider_used}${
+                                res.model_used ? ` • ${res.model_used}` : ""
+                              }`
+                            );
+                          },
+                          onError: (err) => {
+                            const message =
+                              err instanceof Error ? err.message : String(err);
+                            setRewriteTestError(message);
+                          },
+                        }
+                      );
+                    }}
+                  >
+                    Test
+                  </Button>
+
+                  {rewriteTestMeta ? (
+                    <Text size="sm" c="dimmed">
+                      {rewriteTestMeta}
+                    </Text>
+                  ) : null}
+                </div>
+
+                {rewriteTestError ? (
+                  <Text size="sm" c="red">
+                    {rewriteTestError}
+                  </Text>
+                ) : null}
+
+                {rewriteTestOutput ? (
+                  <Textarea
+                    value={rewriteTestOutput}
+                    readOnly
+                    autosize
+                    minRows={3}
+                    styles={{
+                      input: {
+                        backgroundColor: "var(--bg-elevated)",
+                        borderColor: "var(--border-default)",
+                        color: "var(--text-primary)",
+                        fontFamily: "monospace",
+                        fontSize: "13px",
+                      },
+                    }}
+                  />
+                ) : null}
+              </div>
+            </Accordion.Panel>
+          </Accordion.Item>
+
           <PromptSectionEditor
             sectionKey={`${activeProfileId}-main-prompt`}
             title="Core Formatting Rules"

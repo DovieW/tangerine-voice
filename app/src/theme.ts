@@ -53,13 +53,14 @@ export const darkTheme = createTheme({
         track: "tv-switch-track",
         input: "tv-switch-input",
       },
-      styles: {
+      styles: (_theme, props) => ({
+        // NOTE: Using selector keys in a plain `styles` object can leak into
+        // inline styles and trigger React warnings (e.g. "&[data-disabled]").
+        // Use props-based styles instead.
         root: {
-          "&[data-disabled]": {
-            opacity: 0.85,
-          },
+          opacity: props.disabled ? 0.85 : undefined,
         },
-      },
+      }),
     }),
   },
 });

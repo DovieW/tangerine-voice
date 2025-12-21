@@ -318,6 +318,9 @@ struct PipelineInner {
     config: PipelineConfig,
     /// Cancellation token for the current operation
     cancel_token: Option<CancellationToken>,
+
+    /// Last captured audio (WAV bytes). Used for debugging/testing.
+    last_wav_bytes: Option<Vec<u8>>,
 }
 
 impl PipelineInner {
@@ -331,6 +334,7 @@ impl PipelineInner {
             state: PipelineState::Idle,
             config: config.clone(),
             cancel_token: None,
+            last_wav_bytes: None,
         };
         inner.initialize_providers(&config);
         inner
@@ -585,6 +589,9 @@ impl SharedPipeline {
 
         match inner.audio_capture.stop_and_get_wav() {
             Ok(wav_bytes) => {
+                // Keep a copy for STT testing/debugging UI.
+                inner.last_wav_bytes = Some(wav_bytes.clone());
+
                 // Check size limit
                 let max_bytes = inner.config.max_recording_bytes;
                 if max_bytes > 0 && wav_bytes.len() > max_bytes {
@@ -605,6 +612,142 @@ impl SharedPipeline {
             Err(e) => {
                 inner.set_error(&format!("Failed to stop recording: {}", e));
                 Err(PipelineError::AudioCapture(e))
+            }
+        }
+    }
+
+    /// Transcribe the last captured audio (WAV bytes) using the current effective STT settings.
+    ///
+    /// This is intended for settings UI testing and debugging.
+    pub async fn transcribe_last_audio_for_profile(
+        &self,
+        profile_id: Option<&str>,
+    ) -> Result<String, PipelineError> {
+        let (wav_bytes, stt_provider, timeout, retry_config, cancel_token) = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|e| PipelineError::Lock(e.to_string()))?;
+
+            let wav_bytes = inner
+                .last_wav_bytes
+                .clone()
+                .ok_or_else(|| {
+                    PipelineError::Config(
+                        "No audio captured yet. Record once to create test audio.".to_string(),
+                    )
+                })?;
+
+            let config = inner.config.clone();
+
+            // Resolve per-profile overrides. Note: program prompt profiles live under llm_config.
+            let profile = profile_id
+                .and_then(|id| {
+                    if id == "default" {
+                        None
+                    } else {
+                        Some(id)
+                    }
+                })
+                .and_then(|id| {
+                    config
+                        .llm_config
+                        .program_prompt_profiles
+                        .iter()
+                        .find(|p| p.id == id)
+                        .cloned()
+                });
+
+            let desired_stt_provider = canonicalize_stt_provider_id(
+                profile
+                    .as_ref()
+                    .and_then(|p| p.stt_provider.as_deref())
+                    .unwrap_or(config.stt_provider.as_str()),
+            );
+            let desired_stt_model = profile
+                .as_ref()
+                .and_then(|p| p.stt_model.clone())
+                .or_else(|| config.stt_model.clone());
+            let desired_timeout = profile
+                .as_ref()
+                .and_then(|p| p.stt_timeout_seconds)
+                .map(|s| seconds_to_duration_or(s, config.transcription_timeout))
+                .unwrap_or(config.transcription_timeout);
+
+            let stt_provider = match inner.get_or_create_stt_provider(
+                &desired_stt_provider,
+                desired_stt_model.clone(),
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    // If the profile specified an override provider, fall back to global provider.
+                    let global_provider = canonicalize_stt_provider_id(&config.stt_provider);
+                    if global_provider != desired_stt_provider {
+                        log::warn!(
+                            "Pipeline: Profile STT provider '{}' unavailable ({}), falling back to '{}'",
+                            desired_stt_provider,
+                            e,
+                            global_provider
+                        );
+
+                        let global_model = config.stt_model.clone();
+                        inner
+                            .get_or_create_stt_provider(&global_provider, global_model)
+                            .map_err(|err| {
+                                inner.set_error(&format!(
+                                    "No STT provider configured: {}",
+                                    err
+                                ));
+                                PipelineError::NoProvider
+                            })?
+                    } else {
+                        inner.set_error(&format!("No STT provider configured: {}", e));
+                        return Err(PipelineError::NoProvider);
+                    }
+                }
+            };
+
+            let cancel_token = inner
+                .cancel_token
+                .clone()
+                .unwrap_or_else(CancellationToken::new);
+
+            (
+                wav_bytes,
+                stt_provider,
+                desired_timeout,
+                config.retry_config.clone(),
+                cancel_token,
+            )
+        };
+
+        let wav = Arc::new(wav_bytes);
+        let format = AudioFormat::default();
+
+        let transcription_future = async {
+            with_retry(&retry_config, || {
+                let provider = stt_provider.clone();
+                let wav = wav.clone();
+                let format = format.clone();
+                async move { provider.transcribe(wav.as_slice(), &format).await }
+            })
+            .await
+        };
+
+        // Cancellation + timeout protection (mirrors main pipeline flow)
+        tokio::select! {
+            biased;
+
+            _ = cancel_token.cancelled() => {
+                Err(PipelineError::Cancelled)
+            }
+
+            _ = tokio::time::sleep(timeout) => {
+                Err(PipelineError::Timeout(timeout))
+            }
+
+            result = transcription_future => {
+                result.map_err(PipelineError::from)
             }
         }
     }
@@ -636,6 +779,9 @@ impl SharedPipeline {
                     return Err(PipelineError::AudioCapture(e));
                 }
             };
+
+            // Keep a copy for STT testing/debugging UI.
+            inner.last_wav_bytes = Some(wav_bytes.clone());
 
             if inner.config.quiet_audio_gate_enabled
                 && is_effectively_quiet(
@@ -1075,6 +1221,15 @@ impl SharedPipeline {
             .lock()
             .map(|inner| inner.state == PipelineState::Error)
             .unwrap_or(true)
+    }
+
+    /// Whether there is a previously captured audio buffer available for testing.
+    pub fn has_last_audio(&self) -> bool {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.last_wav_bytes.as_ref().map(|b| !b.is_empty()))
+            .unwrap_or(false)
     }
 
     /// Get the cancellation token for external use (e.g., for coordinating with other async tasks)

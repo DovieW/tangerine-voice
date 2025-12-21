@@ -750,6 +750,35 @@ export interface OpenWindowInfo {
 }
 
 // ============================================================================
+// LLM API
+// ============================================================================
+
+export interface TestLlmRewriteResponse {
+  output: string;
+  provider_used: string;
+  model_used: string;
+}
+
+export const llmAPI = {
+  testLlmRewrite: (params: { transcript: string; profileId?: string | null }) =>
+    invoke<TestLlmRewriteResponse>("test_llm_rewrite", {
+      transcript: params.transcript,
+      // Rust param name is `profile_id`
+      profile_id: params.profileId ?? null,
+    }),
+};
+
+export const sttAPI = {
+  testTranscribeLastAudio: (params: { profileId?: string | null }) =>
+    invoke<string>("pipeline_test_transcribe_last_audio", {
+      // Rust param name is `profile_id`
+      profile_id: params.profileId ?? null,
+    }),
+
+  hasLastAudio: () => invoke<boolean>("pipeline_has_last_audio"),
+};
+
+// ============================================================================
 // Config API - Using Tauri commands
 // ============================================================================
 

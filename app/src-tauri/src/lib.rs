@@ -864,6 +864,8 @@ pub fn run() {
             commands::recording::pipeline_dictate,
             commands::recording::pipeline_toggle,
             commands::recording::pipeline_force_reset,
+            commands::recording::pipeline_test_transcribe_last_audio,
+            commands::recording::pipeline_has_last_audio,
             // Config commands (replacing Python server)
             commands::config::get_default_sections,
             commands::config::get_available_providers,
@@ -877,6 +879,7 @@ pub fn run() {
             commands::llm::update_llm_config,
             commands::llm::update_llm_prompts,
             commands::llm::get_llm_config,
+            commands::llm::test_llm_rewrite,
             // Local Whisper model management commands
             commands::whisper::is_local_whisper_available,
             commands::whisper::get_whisper_models,
