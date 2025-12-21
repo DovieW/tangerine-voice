@@ -74,11 +74,13 @@ export interface RewriteProgramPromptProfile {
   // NOTE: These are persisted in settings.json as part of the profile object.
   // The backend may ignore them until it is updated to apply them at runtime.
   sound_enabled?: boolean | null;
-  auto_mute_audio?: boolean | null;
+  playing_audio_handling?: PlayingAudioHandling | null;
   overlay_mode?: OverlayMode | null;
   widget_position?: WidgetPosition | null;
   output_mode?: OutputMode | null;
 }
+
+export type PlayingAudioHandling = "none" | "mute" | "pause" | "mute_and_pause";
 
 export type OverlayMode = "always" | "never" | "recording_only";
 
@@ -123,11 +125,32 @@ export interface AppSettings {
   stt_model: string | null;
   llm_provider: string | null;
   llm_model: string | null;
-  auto_mute_audio: boolean;
+  playing_audio_handling: PlayingAudioHandling;
   stt_timeout_seconds: number | null;
   overlay_mode: OverlayMode;
   widget_position: WidgetPosition;
   output_mode: OutputMode;
+}
+
+function normalizePlayingAudioHandling(value: unknown): PlayingAudioHandling {
+  if (
+    value === "none" ||
+    value === "mute" ||
+    value === "pause" ||
+    value === "mute_and_pause"
+  ) {
+    return value;
+  }
+
+  // Legacy boolean (auto_mute_audio) migration:
+  // - true  => mute
+  // - false => none
+  if (typeof value === "boolean") {
+    return value ? "mute" : "none";
+  }
+
+  // Default for fresh installs / missing setting
+  return "mute";
 }
 
 // ============================================================================
@@ -339,9 +362,16 @@ export const tauriAPI = {
         typeof (p as any).sound_enabled === "boolean"
           ? (p as any).sound_enabled
           : null;
-      const auto_mute_audio =
-        typeof (p as any).auto_mute_audio === "boolean"
-          ? (p as any).auto_mute_audio
+      const playing_audio_handling_raw = (p as any).playing_audio_handling;
+      const legacy_auto_mute_audio = (p as any).auto_mute_audio;
+
+      const playing_audio_handling: PlayingAudioHandling | null =
+        typeof playing_audio_handling_raw === "string"
+          ? normalizePlayingAudioHandling(playing_audio_handling_raw)
+          : typeof legacy_auto_mute_audio === "boolean"
+          ? legacy_auto_mute_audio
+            ? "mute"
+            : "none"
           : null;
 
       const overlay_mode =
@@ -381,7 +411,7 @@ export const tauriAPI = {
         llm_provider,
         llm_model,
         sound_enabled,
-        auto_mute_audio,
+        playing_audio_handling,
         overlay_mode,
         widget_position,
         output_mode,
@@ -419,7 +449,13 @@ export const tauriAPI = {
       stt_model: (await store.get<string | null>("stt_model")) ?? null,
       llm_provider: (await store.get<string | null>("llm_provider")) ?? null,
       llm_model: (await store.get<string | null>("llm_model")) ?? null,
-      auto_mute_audio: (await store.get<boolean>("auto_mute_audio")) ?? false,
+      playing_audio_handling: normalizePlayingAudioHandling(
+        (await store.get("playing_audio_handling")) ??
+          // Legacy key for migration:
+          (await store.get<boolean>("auto_mute_audio")) ??
+          // If neither exists, default to mute
+          "mute"
+      ),
       stt_timeout_seconds:
         (await store.get<number | null>("stt_timeout_seconds")) ?? null,
       overlay_mode: (await store.get<OverlayMode>("overlay_mode")) ?? "always",
@@ -451,6 +487,9 @@ export const tauriAPI = {
     const store = await getStore();
     await store.set("selected_mic_id", micId);
     await store.save();
+
+    // Notify other windows (overlay) to refresh cached settings.
+    await emit("settings-changed", {});
   },
 
   async updateSoundEnabled(enabled: boolean): Promise<void> {
@@ -513,9 +552,11 @@ export const tauriAPI = {
     await store.save();
   },
 
-  async updateAutoMuteAudio(enabled: boolean): Promise<void> {
+  async updatePlayingAudioHandling(
+    handling: PlayingAudioHandling
+  ): Promise<void> {
     const store = await getStore();
-    await store.set("auto_mute_audio", enabled);
+    await store.set("playing_audio_handling", handling);
     await store.save();
   },
 
@@ -531,6 +572,9 @@ export const tauriAPI = {
     await store.save();
     // Apply the mode immediately
     await invoke("set_overlay_mode", { mode });
+
+    // Notify other windows (overlay) to refresh cached settings.
+    await emit("settings-changed", {});
   },
 
   async updateWidgetPosition(position: WidgetPosition): Promise<void> {
@@ -539,6 +583,9 @@ export const tauriAPI = {
     await store.save();
     // Apply the position immediately
     await invoke("set_widget_position", { position });
+
+    // Notify other windows (overlay) to refresh cached settings.
+    await emit("settings-changed", {});
   },
 
   async updateOutputMode(mode: OutputMode): Promise<void> {

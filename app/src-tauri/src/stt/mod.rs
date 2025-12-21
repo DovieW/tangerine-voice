@@ -14,7 +14,9 @@ mod whisper;
 pub use deepgram::DeepgramSttProvider;
 pub use groq::GroqSttProvider;
 pub use openai::OpenAiSttProvider;
-pub use retry::{is_retryable_error, with_retry, RetryConfig};
+pub use retry::{with_retry, RetryConfig};
+#[allow(unused_imports)]
+pub use retry::is_retryable_error;
 
 #[cfg(feature = "local-whisper")]
 pub use whisper::{LocalWhisperConfig, LocalWhisperProvider, WhisperModel};

@@ -128,6 +128,13 @@ pub async fn pipeline_stop_and_transcribe(
             log.stt_duration_ms = Some(result.stt_duration_ms);
             log.llm_duration_ms = result.llm_duration_ms;
 
+            // Use the provider instance's model (includes provider defaults) so the UI can show
+            // the real model used even if no explicit model override was configured.
+            if result.llm_attempted() {
+                log.llm_provider = result.llm_provider_used.clone();
+                log.llm_model = result.llm_model_used.clone();
+            }
+
             log.info(format!(
                 "STT completed in {}ms ({} chars)",
                 result.stt_duration_ms,

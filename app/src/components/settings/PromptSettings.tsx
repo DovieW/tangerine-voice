@@ -708,7 +708,24 @@ export function PromptSettings({
         </Group>
       </Modal>
 
-      <Divider my="md" label="Speech-to-text" labelPosition="left" />
+      <Divider
+        my="md"
+        label="Speech-to-text"
+        labelPosition="left"
+        styles={{
+          root: {
+            borderTopWidth: 2,
+            borderColor: "var(--border-default)",
+          },
+          label: {
+            color: "var(--text-primary)",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          },
+        }}
+      />
 
       <div className="settings-row">
         <div>
@@ -942,7 +959,24 @@ export function PromptSettings({
         </div>
       </div>
 
-      <Divider my="md" label="Language model" labelPosition="left" />
+      <Divider
+        my="md"
+        label="Language model"
+        labelPosition="left"
+        styles={{
+          root: {
+            borderTopWidth: 2,
+            borderColor: "var(--border-default)",
+          },
+          label: {
+            color: "var(--text-primary)",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          },
+        }}
+      />
 
       <div className="settings-row">
         <div>

@@ -133,7 +133,7 @@ export function ProfileConfigModal({
       rewrite_llm_enabled: null,
       // Audio & Overlay settings - all inherit
       sound_enabled: null,
-      auto_mute_audio: null,
+      playing_audio_handling: null,
       overlay_mode: null,
       widget_position: null,
       output_mode: null,
@@ -209,7 +209,7 @@ export function ProfileConfigModal({
 
           // Audio & Overlay settings
           sound_enabled: null,
-          auto_mute_audio: null,
+          playing_audio_handling: null,
           overlay_mode: null,
           widget_position: null,
           output_mode: null,

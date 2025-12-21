@@ -7,6 +7,7 @@ import {
   type HotkeyConfig,
   logsAPI,
   type OutputMode,
+  type PlayingAudioHandling,
   type RewriteProgramPromptProfile,
   tauriAPI,
   validateHotkeyNotDuplicate,
@@ -14,18 +15,18 @@ import {
 } from "./tauri";
 
 export function useTypeText() {
-	return useMutation({
-		mutationFn: (text: string) => invoke("type_text", { text }),
-	});
+  return useMutation({
+    mutationFn: (text: string) => invoke("type_text", { text }),
+  });
 }
 
 // Settings queries and mutations
 export function useSettings() {
-	return useQuery({
-		queryKey: ["settings"],
-		queryFn: () => tauriAPI.getSettings(),
-		staleTime: Number.POSITIVE_INFINITY,
-	});
+  return useQuery({
+    queryKey: ["settings"],
+    queryFn: () => tauriAPI.getSettings(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
 }
 
 export function useUpdateToggleHotkey() {
@@ -152,10 +153,11 @@ export function useUpdateRewriteLlmEnabled() {
   });
 }
 
-export function useUpdateAutoMuteAudio() {
+export function useUpdatePlayingAudioHandling() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (enabled: boolean) => tauriAPI.updateAutoMuteAudio(enabled),
+    mutationFn: (handling: PlayingAudioHandling) =>
+      tauriAPI.updatePlayingAudioHandling(handling),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
     },

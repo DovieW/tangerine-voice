@@ -1,0 +1,65 @@
+import { Switch, createTheme } from "@mantine/core";
+
+/**
+ * App-wide Mantine theme.
+ *
+ * Note: We intentionally force Switch (toggle) ON/OFF track colors here,
+ * because Mantine component styles can otherwise override plain CSS and
+ * make the two states look too similar.
+ */
+export const darkTheme = createTheme({
+  primaryColor: "gray",
+  fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif",
+  headings: {
+    fontFamily: "'Instrument Serif', serif",
+    fontWeight: "400",
+  },
+  colors: {
+    dark: [
+      "#C1C2C5",
+      "#A6A7AB",
+      "#909296",
+      "#5C5F66",
+      "#373A40",
+      "#2C2E33",
+      "#1A1A1A",
+      "#111111",
+      "#0A0A0A",
+      "#000000",
+    ],
+  },
+  components: {
+    Paper: {
+      defaultProps: {
+        bg: "#111111",
+      },
+    },
+    Card: {
+      defaultProps: {
+        bg: "#111111",
+      },
+    },
+
+    // Make enabled/disabled (on/off) states visually distinct.
+    //
+    // Mantine v8 Switch track uses CSS variables:
+    // - background-color: var(--switch-bg)
+    // - checked sets: --switch-bg: var(--switch-color)
+    // So we override *variables* (with dark-scheme specificity) rather than
+    // trying to set background-color directly.
+    Switch: Switch.extend({
+      classNames: {
+        root: "tv-switch-root",
+        track: "tv-switch-track",
+        input: "tv-switch-input",
+      },
+      styles: {
+        root: {
+          "&[data-disabled]": {
+            opacity: 0.85,
+          },
+        },
+      },
+    }),
+  },
+});

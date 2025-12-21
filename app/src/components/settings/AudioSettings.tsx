@@ -7,14 +7,15 @@ import {
   Switch,
   Tooltip,
 } from "@mantine/core";
-import { Info, RotateCcw } from "lucide-react";
+import { Info, RefreshCcw, RotateCcw } from "lucide-react";
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   useIsAudioMuteSupported,
   useSettings,
-  useUpdateAutoMuteAudio,
   useUpdateOutputMode,
   useUpdateOverlayMode,
+  useUpdatePlayingAudioHandling,
   useUpdateRewriteProgramPromptProfiles,
   useUpdateSoundEnabled,
   useUpdateWidgetPosition,
@@ -22,6 +23,7 @@ import {
 import type {
   OutputMode,
   OverlayMode,
+  PlayingAudioHandling,
   RewriteProgramPromptProfile,
   WidgetPosition,
 } from "../../lib/tauri";
@@ -58,6 +60,18 @@ const OUTPUT_MODE_OPTIONS = [
   { value: "clipboard", label: "Clipboard" },
 ];
 
+const PLAYING_AUDIO_HANDLING_OPTIONS: Array<{
+  value: PlayingAudioHandling;
+  label: string;
+}> = [
+  // Keep a "None" option so existing users who had auto-mute disabled
+  // don't suddenly start muting/pausing after this UI change.
+  { value: "none", label: "None" },
+  { value: "mute", label: "Mute" },
+  { value: "pause", label: "Pause" },
+  { value: "mute_and_pause", label: "Mute and Pause" },
+];
+
 function getProfileValue<T>(
   profileValue: T | null | undefined,
   globalValue: T
@@ -73,7 +87,7 @@ export function AudioSettings({
   const { data: settings, isLoading } = useSettings();
   const { data: isAudioMuteSupported } = useIsAudioMuteSupported();
   const updateSoundEnabled = useUpdateSoundEnabled();
-  const updateAutoMuteAudio = useUpdateAutoMuteAudio();
+  const updatePlayingAudioHandling = useUpdatePlayingAudioHandling();
   const updateOverlayMode = useUpdateOverlayMode();
   const updateWidgetPosition = useUpdateWidgetPosition();
   const updateOutputMode = useUpdateOutputMode();
@@ -116,12 +130,16 @@ export function AudioSettings({
   const soundInheriting =
     isProfileScope && isInheriting(profile?.sound_enabled);
 
-  const globalAutoMuteAudio = settings?.auto_mute_audio ?? false;
-  const autoMuteAudio = isProfileScope
-    ? getProfileValue(profile?.auto_mute_audio, globalAutoMuteAudio)
-    : globalAutoMuteAudio;
-  const autoMuteInheriting =
-    isProfileScope && isInheriting(profile?.auto_mute_audio);
+  const globalPlayingAudioHandling: PlayingAudioHandling =
+    settings?.playing_audio_handling ?? "mute";
+  const playingAudioHandling = isProfileScope
+    ? getProfileValue(
+        profile?.playing_audio_handling,
+        globalPlayingAudioHandling
+      )
+    : globalPlayingAudioHandling;
+  const playingAudioHandlingInheriting =
+    isProfileScope && isInheriting(profile?.playing_audio_handling);
 
   const globalOverlayMode: OverlayMode = settings?.overlay_mode ?? "always";
   const overlayMode = isProfileScope
@@ -154,12 +172,14 @@ export function AudioSettings({
     updateSoundEnabled.mutate(checked);
   };
 
-  const handleAutoMuteToggle = (checked: boolean) => {
+  const handlePlayingAudioHandlingChange = (value: string | null) => {
+    if (!value) return;
+    const next = value as PlayingAudioHandling;
     if (isProfileScope) {
-      updateProfile({ auto_mute_audio: checked });
+      updateProfile({ playing_audio_handling: next });
       return;
     }
-    updateAutoMuteAudio.mutate(checked);
+    updatePlayingAudioHandling.mutate(next);
   };
 
   const handleOverlayModeChange = (value: string | null) => {
@@ -178,6 +198,12 @@ export function AudioSettings({
       return;
     }
     updateWidgetPosition.mutate(value as WidgetPosition);
+  };
+
+  const handleSnapWidgetPosition = async () => {
+    // Reposition the overlay window back to the selected preset.
+    // This is useful if the user has dragged the overlay away.
+    await invoke("set_widget_position", { position: widgetPosition });
   };
 
   const handleOutputModeChange = (value: string | null) => {
@@ -277,13 +303,13 @@ export function AudioSettings({
       </div>
       <div className="settings-row">
         <div>
-          <p className="settings-label">Mute audio during recording</p>
+          <p className="settings-label">Playing audio handling</p>
           <p className="settings-description">
-            Automatically mute system audio while dictating
+            Mute and/or pause playing audio while recording
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {isProfileScope && !autoMuteInheriting && (
+          {isProfileScope && !playingAudioHandlingInheriting && (
             <Tooltip label="Disable override (inherit from Default)" withArrow>
               <ActionIcon
                 variant="subtle"
@@ -292,8 +318,9 @@ export function AudioSettings({
                 disabled={isLoading}
                 onClick={() =>
                   openDisableOverrideDialog({
-                    title: "Disable Mute audio override?",
-                    onConfirm: () => updateProfile({ auto_mute_audio: null }),
+                    title: "Disable Playing audio handling override?",
+                    onConfirm: () =>
+                      updateProfile({ playing_audio_handling: null }),
                   })
                 }
               >
@@ -301,24 +328,35 @@ export function AudioSettings({
               </ActionIcon>
             </Tooltip>
           )}
-          {autoMuteInheriting && (
+          {playingAudioHandlingInheriting && (
             <Tooltip label={INHERIT_TOOLTIP} withArrow>
               <Info size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
             </Tooltip>
           )}
           <Tooltip
-            label="Not supported on this platform"
+            label="Mute not supported on this platform"
             disabled={isAudioMuteSupported !== false}
             withArrow
           >
-            <Switch
-              checked={autoMuteAudio}
-              onChange={(event) =>
-                handleAutoMuteToggle(event.currentTarget.checked)
-              }
-              disabled={isLoading || isAudioMuteSupported === false || false}
-              color="gray"
-              size="md"
+            <Select
+              data={PLAYING_AUDIO_HANDLING_OPTIONS.map((o) => ({
+                ...o,
+                disabled:
+                  isAudioMuteSupported === false &&
+                  (o.value === "mute" || o.value === "mute_and_pause"),
+              }))}
+              value={playingAudioHandling}
+              onChange={handlePlayingAudioHandlingChange}
+              disabled={isLoading}
+              withCheckIcon={false}
+              styles={{
+                input: {
+                  backgroundColor: "var(--bg-elevated)",
+                  borderColor: "var(--border-default)",
+                  color: "var(--text-primary)",
+                  minWidth: 180,
+                },
+              }}
             />
           </Tooltip>
         </div>
@@ -402,6 +440,34 @@ export function AudioSettings({
               <Info size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
             </Tooltip>
           )}
+          <Tooltip
+            label="Snap overlay back to this position"
+            withArrow
+            position="top"
+          >
+            <span>
+              <ActionIcon
+                variant="default"
+                size={36}
+                disabled={isLoading || overlayMode === "never"}
+                onClick={() => {
+                  handleSnapWidgetPosition().catch(console.error);
+                }}
+                aria-label="Snap overlay position"
+                styles={{
+                  root: {
+                    backgroundColor: "var(--bg-elevated)",
+                    borderColor: "var(--border-default)",
+                    color: "var(--text-primary)",
+                    height: 36,
+                    width: 36,
+                  },
+                }}
+              >
+                <RefreshCcw size={14} style={{ opacity: 0.75 }} />
+              </ActionIcon>
+            </span>
+          </Tooltip>
           <Select
             data={WIDGET_POSITION_OPTIONS}
             value={widgetPosition}

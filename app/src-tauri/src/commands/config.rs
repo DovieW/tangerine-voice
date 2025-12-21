@@ -309,19 +309,33 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or(false);
 
-    let llm_provider: Option<String> = app
+    let llm_provider_setting: Option<String> = app
         .store("settings.json")
         .ok()
         .and_then(|store| store.get("llm_provider"))
         .and_then(|v| serde_json::from_value(v).ok());
 
-    let llm_model: Option<String> = app
+    let llm_model_setting: Option<String> = app
         .store("settings.json")
         .ok()
         .and_then(|store| store.get("llm_model"))
         .and_then(|v| serde_json::from_value(v).ok());
 
-    let llm_api_key: String = llm_provider
+    // If the user never explicitly selected a model, treat "default" as the provider's
+    // concrete default model so request logs can display the exact model used.
+    let llm_provider_effective = llm_provider_setting
+        .clone()
+        .unwrap_or_else(|| "openai".to_string());
+    let llm_model_effective: Option<String> = llm_model_setting.or_else(|| {
+        if rewrite_llm_enabled {
+            crate::llm::default_llm_model_for_provider(llm_provider_effective.as_str())
+                .map(|m| m.to_string())
+        } else {
+            None
+        }
+    });
+
+    let llm_api_key: String = llm_provider_setting
         .as_deref()
         .map(|provider| {
             let key_name = format!("{}_api_key", provider);
@@ -413,9 +427,9 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         max_recording_bytes: 50 * 1024 * 1024, // 50MB
         llm_config: crate::llm::LlmConfig {
             enabled: llm_enabled,
-            provider: llm_provider.clone().unwrap_or_else(|| "openai".to_string()),
+            provider: llm_provider_effective,
             api_key: llm_api_key,
-            model: llm_model.clone(),
+            model: llm_model_effective.clone(),
             prompts: base_prompts,
             program_prompt_profiles,
             ..Default::default()
@@ -432,8 +446,8 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
             "Pipeline config synced - STT: {} ({}), LLM: {} ({}), VAD: {}",
             stt_provider,
             stt_model.as_deref().unwrap_or("default"),
-            llm_provider.clone().unwrap_or_else(|| "disabled".to_string()),
-            llm_model.as_deref().unwrap_or("default"),
+            llm_provider_setting.clone().unwrap_or_else(|| "disabled".to_string()),
+            llm_model_effective.as_deref().unwrap_or("default"),
             vad_settings.enabled
         );
     }

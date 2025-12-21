@@ -14,6 +14,37 @@
 	--accent-primary: #a0a0a0;
 	--accent-glow: rgba(160, 160, 160, 0.15);
 	--accent-hover: #c0c0c0;
+
+	/*
+		Toggle (Switch) colors
+		- OFF (unchecked) should be darker
+		- ON (checked) should be lighter
+	*/
+	--toggle-track-off-bg: rgba(255, 255, 255, 0.14);
+	--toggle-track-off-border: rgba(255, 255, 255, 0.18);
+	--toggle-track-on-bg: rgba(255, 255, 255, 0.38);
+	--toggle-track-on-border: rgba(255, 255, 255, 0.45);
+}
+
+/*
+	Mantine v8 Switch uses CSS variables:
+	- track background: var(--switch-bg)
+	- checked state sets: --switch-bg = var(--switch-color)
+
+	We attach stable classNames in theme.ts (tv-switch-*) and override the
+	variables here with higher specificity than Mantine's built-in dark-scheme rules.
+*/
+[data-mantine-color-scheme='dark'] .tv-switch-track {
+	--switch-bg: var(--toggle-track-off-bg);
+	--switch-color: var(--toggle-track-on-bg);
+	--switch-disabled-color: rgba(255, 255, 255, 0.10);
+
+	/* Optional: add a tiny border feel to improve readability */
+	box-shadow: inset 0 0 0 1px var(--toggle-track-off-border);
+}
+
+[data-mantine-color-scheme='dark'] .tv-switch-input:checked + .tv-switch-track {
+	box-shadow: inset 0 0 0 1px var(--toggle-track-on-border);
 }
 
 * {

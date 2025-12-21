@@ -30,6 +30,9 @@ use settings::HotkeyConfig;
 use state::AppState;
 
 #[cfg(desktop)]
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+#[cfg(desktop)]
 use tauri_plugin_store::StoreExt;
 
 #[cfg(desktop)]
@@ -158,6 +161,159 @@ fn filter_whisper_hallucinations(transcript: &str) -> Option<String> {
     }
 }
 
+// ============================================================================
+// Playing audio handling during recording
+// ============================================================================
+
+#[cfg(desktop)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayingAudioHandling {
+    None,
+    Mute,
+    Pause,
+    MuteAndPause,
+}
+
+#[cfg(desktop)]
+impl PlayingAudioHandling {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "none" => Self::None,
+            "mute" => Self::Mute,
+            "pause" => Self::Pause,
+            "mute_and_pause" => Self::MuteAndPause,
+            // Unknown values: fall back to the default.
+            _ => Self::Mute,
+        }
+    }
+
+    fn wants_mute(self) -> bool {
+        matches!(self, Self::Mute | Self::MuteAndPause)
+    }
+
+    fn wants_pause(self) -> bool {
+        matches!(self, Self::Pause | Self::MuteAndPause)
+    }
+}
+
+#[cfg(desktop)]
+fn get_playing_audio_handling(app: &AppHandle) -> PlayingAudioHandling {
+    // Prefer the new enum setting.
+    let raw: serde_json::Value =
+        get_setting_from_store(app, "playing_audio_handling", serde_json::Value::Null);
+
+    if let serde_json::Value::String(s) = raw {
+        return PlayingAudioHandling::from_str(&s);
+    }
+
+    // Legacy fallback: auto_mute_audio boolean.
+    // If the legacy key is missing entirely, we default to Mute.
+    let legacy_raw: serde_json::Value =
+        get_setting_from_store(app, "auto_mute_audio", serde_json::Value::Null);
+
+    match legacy_raw {
+        serde_json::Value::Bool(true) => PlayingAudioHandling::Mute,
+        serde_json::Value::Bool(false) => PlayingAudioHandling::None,
+        _ => PlayingAudioHandling::Mute,
+    }
+}
+
+#[cfg(desktop)]
+fn toggle_media_play_pause(app: &AppHandle) -> Result<(), String> {
+    // On macOS, enigo requires running on the main thread.
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        app.run_on_main_thread(move || {
+            let mut enigo = match Enigo::new(&Settings::default()) {
+                Ok(e) => e,
+                Err(e) => {
+                    let _ = tx.send(Err(e.to_string()));
+                    return;
+                }
+            };
+
+            let result = enigo
+                .key(Key::MediaPlayPause, Direction::Click)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        })
+        .map_err(|e| e.to_string())?;
+        return rx.recv().map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // `app` is only needed on macOS (main-thread requirement). Silence the
+        // unused-parameter warning on other platforms without changing behavior.
+        let _ = app;
+        let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::MediaPlayPause, Direction::Click)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_non_system_audio_session_active() -> Result<bool, String> {
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, AudioSessionStateActive, IAudioSessionManager2, IMMDevice,
+        IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    unsafe {
+        // Initialize COM (ignore error if already initialized)
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| format!("Failed to create device enumerator: {}", e))?;
+
+        let device: IMMDevice = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|e| format!("Failed to get default audio endpoint: {}", e))?;
+
+        // Enumerate sessions on the default render endpoint.
+        let session_manager = device
+            .Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)
+            .map_err(|e| format!("Failed to activate session manager: {}", e))?;
+
+        let sessions = session_manager
+            .GetSessionEnumerator()
+            .map_err(|e| format!("Failed to get session enumerator: {}", e))?;
+
+        let count = sessions
+            .GetCount()
+            .map_err(|e| format!("Failed to get session count: {}", e))?;
+
+        for i in 0..count {
+            let session = sessions
+                .GetSession(i)
+                .map_err(|e| format!("Failed to get session {}: {}", i, e))?;
+
+            let state = session
+                .GetState()
+                .map_err(|e| format!("Failed to get session state: {}", e))?;
+            if state == AudioSessionStateActive {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_non_system_audio_session_active() -> Result<bool, String> {
+    // Best-effort on non-Windows platforms: we don't currently have a reliable
+    // cross-platform way to detect whether audio is actively playing.
+    Ok(true)
+}
+
 /// Start recording with sound and audio mute handling
 #[cfg(desktop)]
 fn start_recording(
@@ -165,7 +321,7 @@ fn start_recording(
     state: &AppState,
     sound_enabled: bool,
     audio_mute_manager: &Option<tauri::State<'_, AudioMuteManager>>,
-    auto_mute_audio: bool,
+    playing_audio_handling: PlayingAudioHandling,
     source: &str,
 ) {
     // Log current pipeline state before attempting to start
@@ -219,12 +375,39 @@ fn start_recording(
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
     // Mute system audio if enabled
-    if auto_mute_audio {
+    if playing_audio_handling.wants_mute() {
         if let Some(manager) = audio_mute_manager {
             if let Err(e) = manager.mute() {
                 log::warn!("Failed to mute audio: {}", e);
             }
         }
+    }
+
+    // Pause playing audio (best-effort).
+    if playing_audio_handling.wants_pause() {
+        match is_non_system_audio_session_active() {
+            Ok(true) => match toggle_media_play_pause(app) {
+                Ok(()) => {
+                    state.play_pause_toggled.store(true, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    log::warn!("Failed to toggle media play/pause: {}", e);
+                    state.play_pause_toggled.store(false, Ordering::SeqCst);
+                }
+            },
+            Ok(false) => {
+                // Nothing appears to be playing: don't send play/pause,
+                // otherwise we might accidentally start playback.
+                state.play_pause_toggled.store(false, Ordering::SeqCst);
+            }
+            Err(e) => {
+                // Detection failed: be conservative and avoid toggling.
+                log::warn!("Failed to detect active audio session; skipping pause: {}", e);
+                state.play_pause_toggled.store(false, Ordering::SeqCst);
+            }
+        }
+    } else {
+        state.play_pause_toggled.store(false, Ordering::SeqCst);
     }
 
     let _ = app.emit("recording-start", ());
@@ -237,14 +420,14 @@ fn stop_recording(
     state: &AppState,
     sound_enabled: bool,
     audio_mute_manager: &Option<tauri::State<'_, AudioMuteManager>>,
-    auto_mute_audio: bool,
+    playing_audio_handling: PlayingAudioHandling,
     source: &str,
 ) {
     state.is_recording.store(false, Ordering::SeqCst);
     log::info!("{}: stopping recording", source);
     emit_system_event(app, "shortcut", &format!("{}: stopping recording", source), None);
     // Unmute system audio if it was muted
-    if auto_mute_audio {
+    if playing_audio_handling.wants_mute() {
         if let Some(manager) = audio_mute_manager {
             if let Err(e) = manager.unmute() {
                 log::warn!("Failed to unmute audio: {}", e);
@@ -253,6 +436,15 @@ fn stop_recording(
     }
     if sound_enabled {
         audio::play_sound(audio::SoundType::RecordingStop);
+    }
+
+    // Resume playing audio if we previously toggled it.
+    if playing_audio_handling.wants_pause()
+        && state.play_pause_toggled.swap(false, Ordering::SeqCst)
+    {
+        if let Err(e) = toggle_media_play_pause(app) {
+            log::warn!("Failed to restore media play/pause: {}", e);
+        }
     }
 
     // Get overlay mode for hiding after transcription
@@ -373,10 +565,23 @@ fn stop_recording(
                         log::info!("Transcript filtered as hallucination, not outputting");
                     }
 
-                    // Hide overlay after transcription completes if in "recording_only" mode
+                    // Hide overlay after transcription completes if in "recording_only" mode.
+                    // We request a hide so the frontend can animate (zoom-out) before the webview hides.
                     if overlay_mode_clone == "recording_only" {
+                        let _ = app_clone.emit("overlay-hide-requested", ());
+
+                        // Fallback: if the overlay frontend isn't running/listening, hide anyway.
+                        // Re-check the current overlay_mode before hiding to avoid races with settings changes.
                         if let Some(window) = app_clone.get_webview_window("overlay") {
-                            let _ = window.hide();
+                            let window_clone = window.clone();
+                            let app_check = app_clone.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+                                let current_mode: String = get_setting_from_store(&app_check, "overlay_mode", "always".to_string());
+                                if current_mode == "recording_only" {
+                                    let _ = window_clone.hide();
+                                }
+                            });
                         }
                     }
                 }
@@ -392,10 +597,22 @@ fn stop_recording(
                         log_store.complete_current();
                     }
 
-                    // Hide overlay even on error if in "recording_only" mode
+                    // Hide overlay even on error if in "recording_only" mode.
+                    // Request a hide so the frontend can animate out.
                     if overlay_mode_clone == "recording_only" {
+                        let _ = app_clone.emit("overlay-hide-requested", ());
+
+                        // Fallback hide.
                         if let Some(window) = app_clone.get_webview_window("overlay") {
-                            let _ = window.hide();
+                            let window_clone = window.clone();
+                            let app_check = app_clone.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+                                let current_mode: String = get_setting_from_store(&app_check, "overlay_mode", "always".to_string());
+                                if current_mode == "recording_only" {
+                                    let _ = window_clone.hide();
+                                }
+                            });
                         }
                     }
                 }
@@ -413,7 +630,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
 
     // Get current settings from store
     let sound_enabled: bool = get_setting_from_store(app, "sound_enabled", true);
-    let auto_mute_audio: bool = get_setting_from_store(app, "auto_mute_audio", false);
+    let playing_audio_handling: PlayingAudioHandling = get_playing_audio_handling(app);
 
     // Get shortcut string for comparison (normalized to handle "ctrl" vs "control" differences)
     let shortcut_str = normalize_shortcut_string(&shortcut.to_string());
@@ -478,7 +695,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
                             &state,
                             sound_enabled,
                             &audio_mute_manager,
-                            auto_mute_audio,
+                            playing_audio_handling,
                             "Toggle",
                         );
                     } else {
@@ -487,7 +704,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
                             &state,
                             sound_enabled,
                             &audio_mute_manager,
-                            auto_mute_audio,
+                            playing_audio_handling,
                             "Toggle",
                         );
                     }
@@ -517,7 +734,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
                             &state,
                             sound_enabled,
                             &audio_mute_manager,
-                            auto_mute_audio,
+                            playing_audio_handling,
                             "Hold",
                         );
                     }
@@ -537,7 +754,7 @@ pub fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: &Short
                             &state,
                             sound_enabled,
                             &audio_mute_manager,
-                            auto_mute_audio,
+                            playing_audio_handling,
                             "Hold",
                         );
                     }
@@ -749,9 +966,10 @@ pub fn run() {
                 let screen_width = size.width as f64 / scale;
                 let screen_height = size.height as f64 / scale;
 
-                // Assume initial window size of 48x48 (before content loads)
-                let window_width = 48.0;
-                let window_height = 48.0;
+                // Estimate initial widget size (before content loads). The frontend will
+                // auto-resize after mount, but using a closer estimate prevents off-screen drift.
+                let window_width = 264.0;
+                let window_height = 56.0;
                 let margin = 50.0;
 
                 let widget_position: String = get_setting_from_store(app.handle(), "widget_position", "bottom-right".to_string());
@@ -900,10 +1118,24 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
 
     // Read LLM settings from store
     let rewrite_llm_enabled: bool = get_setting_from_store(app, "rewrite_llm_enabled", false);
-    let llm_provider: Option<String> = get_setting_from_store(app, "llm_provider", None);
-    let llm_model: Option<String> = get_setting_from_store(app, "llm_model", None);
+    let llm_provider_setting: Option<String> = get_setting_from_store(app, "llm_provider", None);
+    let llm_model_setting: Option<String> = get_setting_from_store(app, "llm_model", None);
 
-    let llm_api_key: String = llm_provider
+    // If the user never explicitly selected a model, treat "default" as the provider's
+    // concrete default model so request logs can display the exact model used.
+    let llm_provider_effective = llm_provider_setting
+        .clone()
+        .unwrap_or_else(|| "openai".to_string());
+    let llm_model_effective: Option<String> = llm_model_setting.or_else(|| {
+        if rewrite_llm_enabled {
+            llm::default_llm_model_for_provider(llm_provider_effective.as_str())
+                .map(|m| m.to_string())
+        } else {
+            None
+        }
+    });
+
+    let llm_api_key: String = llm_provider_setting
         .as_deref()
         .map(|provider| {
             let key_name = format!("{}_api_key", provider);
@@ -971,9 +1203,9 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         max_recording_bytes: 50 * 1024 * 1024, // 50MB
         llm_config: llm::LlmConfig {
             enabled: llm_enabled,
-            provider: llm_provider.unwrap_or_else(|| "openai".to_string()),
+            provider: llm_provider_effective,
             api_key: llm_api_key,
-            model: llm_model,
+            model: llm_model_effective,
             prompts: base_prompts,
             program_prompt_profiles,
             ..Default::default()

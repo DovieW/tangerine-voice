@@ -1,4 +1,16 @@
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
+
+#[cfg(desktop)]
+use tauri_plugin_store::StoreExt;
+
+#[cfg(desktop)]
+fn get_setting_from_store<T: serde::de::DeserializeOwned>(app: &AppHandle, key: &str, default: T) -> T {
+    app.store("settings.json")
+        .ok()
+        .and_then(|store| store.get(key))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default)
+}
 
 #[tauri::command]
 pub async fn resize_overlay(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
@@ -8,15 +20,20 @@ pub async fn resize_overlay(app: AppHandle, width: f64, height: f64) -> Result<(
     let height = height.max(min_size);
 
     if let Some(window) = app.get_webview_window("overlay") {
-        // Get current center point from current position and size
-        // This allows the overlay to be dragged and maintain its new position
-        let center = if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+        // We position using *outer* geometry (position + size), because that's what the OS
+        // uses for window placement. On Windows/macOS the outer size includes decorations,
+        // so using the requested logical size directly can cause subtle drift.
+        let prev = if let (Ok(pos), Ok(outer_size), Ok(inner_size)) =
+            (window.outer_position(), window.outer_size(), window.inner_size())
+        {
             let scale = window.scale_factor().unwrap_or(1.0);
             let x = pos.x as f64 / scale;
             let y = pos.y as f64 / scale;
-            let w = size.width as f64 / scale;
-            let h = size.height as f64 / scale;
-            Some((x + w / 2.0, y + h / 2.0))
+            let w = outer_size.width as f64 / scale;
+            let h = outer_size.height as f64 / scale;
+            let inner_w = inner_size.width as f64 / scale;
+            let inner_h = inner_size.height as f64 / scale;
+            Some((x, y, w, h, inner_w, inner_h, scale))
         } else {
             None
         };
@@ -26,10 +43,55 @@ pub async fn resize_overlay(app: AppHandle, width: f64, height: f64) -> Result<(
             .set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }))
             .map_err(|e| e.to_string())?;
 
-        // Reposition to keep center fixed
-        if let Some((cx, cy)) = center {
-            let x = cx - width / 2.0;
-            let y = cy - height / 2.0;
+        // For the fixed collapsed/expanded toggle sizes (56x56 <-> 264x56), keep the window
+        // center fixed so the expanded state grows out from the collapsed widget's location.
+        // Avoid clamping in this path: users prefer slight off-screen over "push away" drift.
+        let is_fixed_toggle_size = (height - 56.0).abs() < 0.5
+            && ((width - 56.0).abs() < 0.5 || (width - 264.0).abs() < 0.5);
+
+        if let Some((prev_x, prev_y, prev_outer_w, prev_outer_h, prev_inner_w, prev_inner_h, scale)) =
+            prev
+        {
+            // Try to use the actual outer size after resize (most accurate).
+            // Fall back to estimating using the previous decoration delta if needed.
+            let (new_outer_w, new_outer_h) = match window.outer_size() {
+                Ok(sz) => (sz.width as f64 / scale, sz.height as f64 / scale),
+                Err(_) => {
+                    // Estimate decoration delta using the pre-resize outer vs inner sizes.
+                    let decor_w = (prev_outer_w - prev_inner_w).max(0.0);
+                    let decor_h = (prev_outer_h - prev_inner_h).max(0.0);
+                    (width + decor_w, height + decor_h)
+                }
+            };
+
+            let mut x;
+            let mut y;
+
+            if is_fixed_toggle_size {
+                let cx = prev_x + prev_outer_w / 2.0;
+                let cy = prev_y + prev_outer_h / 2.0;
+                x = cx - new_outer_w / 2.0;
+                y = cy - new_outer_h / 2.0;
+            } else {
+                // Default: preserve top-left and clamp to screen bounds.
+                x = prev_x;
+                y = prev_y;
+
+                if let Ok(Some(monitor)) = window.current_monitor() {
+                    let screen_size = monitor.size();
+                    let scale = monitor.scale_factor();
+                    let screen_width = screen_size.width as f64 / scale;
+                    let screen_height = screen_size.height as f64 / scale;
+
+                    let margin = 12.0;
+                    let max_x = (screen_width - new_outer_w - margin).max(margin);
+                    let max_y = (screen_height - new_outer_h - margin).max(margin);
+
+                    x = x.clamp(margin, max_x);
+                    y = y.clamp(margin, max_y);
+                }
+            }
+
             window
                 .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
                 .map_err(|e| e.to_string())?;
@@ -63,11 +125,32 @@ pub async fn set_overlay_mode(app: AppHandle, mode: String) -> Result<(), String
                 window.show().map_err(|e| e.to_string())?;
             }
             "never" => {
-                window.hide().map_err(|e| e.to_string())?;
+                // Ask the frontend to animate out before we hide.
+                let _ = app.emit("overlay-hide-requested", ());
+
+                // Fallback hide (in case the overlay UI isn't ready to handle the event).
+                let window_clone = window.clone();
+                let app_clone = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+                    let current_mode: String = get_setting_from_store(&app_clone, "overlay_mode", "always".to_string());
+                    if current_mode == "never" {
+                        let _ = window_clone.hide();
+                    }
+                });
             }
             "recording_only" => {
                 // Hide initially, will be shown when recording starts
-                window.hide().map_err(|e| e.to_string())?;
+                let _ = app.emit("overlay-hide-requested", ());
+                let window_clone = window.clone();
+                let app_clone = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+                    let current_mode: String = get_setting_from_store(&app_clone, "overlay_mode", "always".to_string());
+                    if current_mode == "recording_only" {
+                        let _ = window_clone.hide();
+                    }
+                });
             }
             _ => {
                 return Err(format!("Invalid overlay mode: {}", mode));

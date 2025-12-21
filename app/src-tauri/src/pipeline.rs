@@ -190,6 +190,16 @@ pub struct TranscriptionResult {
     pub stt_duration_ms: u64,
     /// Duration of the LLM phase (including timeout/fallback), in milliseconds.
     pub llm_duration_ms: Option<u64>,
+    /// LLM provider id actually used for this transcription (if the LLM step was attempted).
+    ///
+    /// This is sourced from the concrete provider instance (including any default/fallback
+    /// model selection performed by the provider implementation).
+    pub llm_provider_used: Option<String>,
+    /// LLM model actually used for this transcription (if the LLM step was attempted).
+    ///
+    /// This is sourced from the concrete provider instance. If the configured model is None,
+    /// this will still be populated with the provider's internal default model.
+    pub llm_model_used: Option<String>,
     /// Outcome of the LLM phase.
     pub llm_outcome: LlmOutcome,
 }
@@ -777,6 +787,11 @@ impl SharedPipeline {
         let mut llm_duration_ms: Option<u64> = None;
         let mut llm_outcome: LlmOutcome = LlmOutcome::NotAttempted;
 
+        // Capture the *actual* provider/model that will be used (including provider defaults)
+        // before we move `llm_provider` into the formatting block.
+        let llm_provider_used: Option<String> = llm_provider.as_ref().map(|p| p.name().to_string());
+        let llm_model_used: Option<String> = llm_provider.as_ref().map(|p| p.model().to_string());
+
         let final_text = if let Some(llm) = llm_provider {
             log::info!("Pipeline: Applying LLM formatting");
 
@@ -842,6 +857,8 @@ impl SharedPipeline {
             final_text,
             stt_duration_ms,
             llm_duration_ms,
+            llm_provider_used,
+            llm_model_used,
             llm_outcome,
         })
     }

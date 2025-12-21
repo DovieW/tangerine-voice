@@ -141,8 +141,6 @@ export function HotkeySettings({
       <div
         style={{
           marginTop: 24,
-          paddingTop: 16,
-          borderTop: "1px solid var(--mantine-color-dark-4)",
           display: "flex",
           alignItems: "center",
           justifyContent: "flex-end",

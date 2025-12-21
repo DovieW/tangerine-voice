@@ -16,9 +16,177 @@ body {
 #root {
 	width: 100%;
 	height: 100%;
+	display: block;
+}
+
+/* Overlay widget animation + layout */
+.overlay-widget {
+	transform-origin: 50% 50%;
+	transition:
+		opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		filter 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		background-color 180ms ease;
+	width: 100%;
+	height: 100%;
+}
+
+.overlay-widget[data-anim="enter"] {
+	opacity: 0;
+	transform: scale(0.86);
+	filter: blur(2px);
+}
+
+.overlay-widget[data-anim="visible"] {
+	opacity: 1;
+	transform: scale(1);
+	filter: blur(0);
+}
+
+.overlay-widget[data-anim="exit"] {
+	opacity: 0;
+	transform: scale(0.92);
+	filter: blur(1px);
+}
+
+/* The overlay window resizes between 56x56 (collapsed) and 264x56 (expanded).
+ * We keep a full-window stage that centers the active button so expansion
+ * grows from the same visual anchor (no "missing right wall" intermediate). */
+.overlay-stage {
+	width: 100%;
+	height: 100%;
 	display: flex;
 	align-items: center;
 	justify-content: center;
+}
+
+.overlay-button {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	border-radius: 16px;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	background: rgba(0, 0, 0, 0.88);
+	color: #fff;
+	cursor: pointer;
+	user-select: none;
+	-webkit-user-select: none;
+	backdrop-filter: blur(10px);
+	/*
+	 * NOTE: Expand/collapse animation disabled for now.
+	 * It looked cool, but repeated native window resizing during transitions can get jittery.
+	 * If we bring it back, we should do it with a fixed-size window or a single resize at end.
+	 */
+	/* transition:
+		width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		padding 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		gap 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		background-color 180ms ease,
+		border-color 180ms ease; */
+	/* overflow: hidden; */
+}
+
+/* Collapsed: logo-only pill */
+.overlay-button--collapsed {
+	width: 56px;
+	height: 56px;
+	padding: 10px;
+	gap: 0;
+	justify-content: center;
+}
+
+.overlay-button--collapsed .overlay-center,
+.overlay-button--collapsed .overlay-meta {
+	display: none;
+}
+
+/* Expanded: icon + waveform + REC pill */
+.overlay-button--expanded {
+	width: 264px;
+	height: 56px;
+}
+
+.overlay-button:hover {
+	background: rgba(20, 20, 20, 0.9);
+}
+
+.overlay-button:disabled {
+	opacity: 0.75;
+	cursor: wait;
+}
+
+.overlay-icon {
+	width: 36px;
+	height: 36px;
+	display: grid;
+	place-items: center;
+	flex: 0 0 auto;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.overlay-center {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	padding: 0 4px;
+	/* expand/collapse animation disabled (see .overlay-button note) */
+}
+
+.overlay-meta {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	/* expand/collapse animation disabled (see .overlay-button note) */
+}
+
+.overlay-pill {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	padding: 5px 8px;
+	border-radius: 999px;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	background: rgba(255, 255, 255, 0.06);
+	color: rgba(255, 255, 255, 0.9);
+}
+
+
+.overlay-pill[data-variant="dim"] {
+	border-color: rgba(255, 255, 255, 0.10);
+	background: rgba(255, 255, 255, 0.04);
+	color: rgba(255, 255, 255, 0.72);
+	opacity: 0.9;
+}
+
+
+.overlay-pill[data-variant="rec"] {
+	border-color: rgba(239, 68, 68, 0.4);
+	background: rgba(239, 68, 68, 0.16);
+	color: rgba(255, 220, 220, 0.95);
+}
+
+.overlay-error-text {
+	font-size: 12px;
+	color: rgba(255, 255, 255, 0.92);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 180px;
+}
+
+.overlay-wave {
+	width: 100%;
+	max-width: 168px;
+	height: 24px;
+	display: block;
 }
 
 /* Hide tooltips/popups in overlay - use high specificity instead of !important */

@@ -15,160 +15,178 @@ import {
 } from "@mantine/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-	AlertCircle,
-	AlertTriangle,
-	Bug,
-	CheckCircle,
-	Clock,
-	Copy,
-	Info,
-	Loader,
-	RefreshCw,
-	Trash2,
-	XCircle,
-	Zap,
+  AlertCircle,
+  AlertTriangle,
+  Bug,
+  CheckCircle,
+  Clock,
+  Copy,
+  Info,
+  Loader,
+  Trash2,
+  XCircle,
+  Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useClearRequestLogs, useRequestLogs } from "../lib/queries";
 import type {
-	LogEntry,
-	LogLevel,
-	RequestLog,
-	RequestStatus,
+  LogEntry,
+  LogLevel,
+  RequestLog,
+  RequestStatus,
 } from "../lib/tauri";
 
 // System event from Rust backend
 interface SystemEvent {
-	timestamp: string;
-	event_type: string;
-	message: string;
-	details: string | null;
+  timestamp: string;
+  event_type: string;
+  message: string;
+  details: string | null;
 }
 
 function formatTimestamp(timestamp: string): string {
-	const date = new Date(timestamp);
-	return date.toLocaleString(undefined, {
-		month: "short",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-		second: "2-digit",
-	});
+  const date = new Date(timestamp);
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function formatDuration(ms: number): string {
-	if (ms < 1000) return `${ms}ms`;
-	return `${(ms / 1000).toFixed(2)}s`;
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
 }
 
 function getStatusBadge(status: RequestStatus) {
-	switch (status) {
-		case "success":
-			return (
-				<Badge color="green" leftSection={<CheckCircle size={12} />}>
-					Success
-				</Badge>
-			);
-		case "error":
-			return (
-				<Badge color="red" leftSection={<XCircle size={12} />}>
-					Error
-				</Badge>
-			);
-		case "cancelled":
-			return (
-				<Badge color="yellow" leftSection={<AlertCircle size={12} />}>
-					Cancelled
-				</Badge>
-			);
-		case "in_progress":
-			return (
-				<Badge
-					color="blue"
-					leftSection={<Loader size={12} className="animate-spin" />}
-				>
-					In Progress
-				</Badge>
-			);
-		default:
-			return <Badge color="gray">{status}</Badge>;
-	}
+  switch (status) {
+    case "success":
+      return (
+        <Badge color="green" leftSection={<CheckCircle size={12} />}>
+          Success
+        </Badge>
+      );
+    case "error":
+      return (
+        <Badge color="red" leftSection={<XCircle size={12} />}>
+          Error
+        </Badge>
+      );
+    case "cancelled":
+      return (
+        <Badge color="yellow" leftSection={<AlertCircle size={12} />}>
+          Cancelled
+        </Badge>
+      );
+    case "in_progress":
+      return (
+        <Badge
+          color="blue"
+          leftSection={<Loader size={12} className="animate-spin" />}
+        >
+          In Progress
+        </Badge>
+      );
+    default:
+      return <Badge color="gray">{status}</Badge>;
+  }
 }
 
 function getLogLevelIcon(level: LogLevel) {
-	switch (level) {
-		case "debug":
-			return <Bug size={14} style={{ color: "var(--mantine-color-dimmed)" }} />;
-		case "info":
-			return (
-				<Info size={14} style={{ color: "var(--mantine-color-blue-5)" }} />
-			);
-		case "warn":
-			return (
-				<AlertTriangle
-					size={14}
-					style={{ color: "var(--mantine-color-yellow-5)" }}
-				/>
-			);
-		case "error":
-			return (
-				<AlertCircle
-					size={14}
-					style={{ color: "var(--mantine-color-red-5)" }}
-				/>
-			);
-		default:
-			return null;
-	}
+  switch (level) {
+    case "debug":
+      return <Bug size={14} style={{ color: "var(--mantine-color-dimmed)" }} />;
+    case "info":
+      return (
+        <Info size={14} style={{ color: "var(--mantine-color-blue-5)" }} />
+      );
+    case "warn":
+      return (
+        <AlertTriangle
+          size={14}
+          style={{ color: "var(--mantine-color-yellow-5)" }}
+        />
+      );
+    case "error":
+      return (
+        <AlertCircle
+          size={14}
+          style={{ color: "var(--mantine-color-red-5)" }}
+        />
+      );
+    default:
+      return null;
+  }
 }
 
 function getLogLevelColor(level: LogLevel): string {
-	switch (level) {
-		case "debug":
-			return "dimmed";
-		case "info":
-			return "blue";
-		case "warn":
-			return "yellow";
-		case "error":
-			return "red";
-		default:
-			return "gray";
-	}
+  switch (level) {
+    case "debug":
+      return "dimmed";
+    case "info":
+      return "blue";
+    case "warn":
+      return "yellow";
+    case "error":
+      return "red";
+    default:
+      return "gray";
+  }
 }
 
 function LogEntryItem({ entry }: { entry: LogEntry }) {
-	const time = new Date(entry.timestamp).toLocaleTimeString(undefined, {
-		hour: "2-digit",
-		minute: "2-digit",
-		second: "2-digit",
-		fractionalSecondDigits: 3,
-	});
+  const time = new Date(entry.timestamp).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+  });
 
-	return (
-		<Group gap="xs" align="flex-start" wrap="nowrap">
-			<Text size="xs" c="dimmed" ff="monospace" style={{ minWidth: 85 }}>
-				{time}
-			</Text>
-			{getLogLevelIcon(entry.level)}
-			<Box style={{ flex: 1 }}>
-				<Text size="sm" c={getLogLevelColor(entry.level)}>
-					{entry.message}
-				</Text>
-				{entry.details && (
-					<Code block mt={4} style={{ fontSize: "0.75rem" }}>
-						{entry.details}
-					</Code>
-				)}
-			</Box>
-		</Group>
-	);
+  return (
+    <Group gap="xs" align="flex-start" wrap="nowrap">
+      <Text size="xs" c="dimmed" ff="monospace" style={{ minWidth: 85 }}>
+        {time}
+      </Text>
+      {getLogLevelIcon(entry.level)}
+      <Box style={{ flex: 1 }}>
+        <Text size="sm" c={getLogLevelColor(entry.level)}>
+          {entry.message}
+        </Text>
+        {entry.details && (
+          <Code block mt={4} style={{ fontSize: "0.75rem" }}>
+            {entry.details}
+          </Code>
+        )}
+      </Box>
+    </Group>
+  );
 }
 
 function RequestLogItem({ log }: { log: RequestLog }) {
-	const hasLLM = log.llm_provider !== null;
+  // NOTE: `llm_provider`/`llm_model` can reflect configured defaults.
+  // Use `llm_duration_ms` to indicate whether an LLM rewrite was actually attempted.
+  const llmAttempted = log.llm_duration_ms !== null;
+  const llmProviderLabel = log.llm_provider ?? "unknown";
+  const sttMetaLabel = `${log.stt_provider}${
+    log.stt_model ? ` / ${log.stt_model}` : ""
+  }`;
+  const llmMetaLabel = `${llmProviderLabel}${
+    log.llm_model ? ` / ${log.llm_model}` : ""
+  }`;
 
-	return (
+  const rawTranscript = log.raw_transcript?.trim() ? log.raw_transcript : null;
+  // Only treat as a "rewrite" if we actually attempted LLM formatting and the output differs.
+  const llmRewrite =
+    llmAttempted &&
+    log.final_text?.trim() &&
+    log.raw_transcript &&
+    log.final_text !== log.raw_transcript
+      ? log.final_text
+      : null;
+
+  return (
     <Accordion.Item value={log.id}>
       <Accordion.Control>
         <Group justify="space-between" wrap="nowrap" pr="md">
@@ -176,38 +194,19 @@ function RequestLogItem({ log }: { log: RequestLog }) {
             <Text size="sm" c="dimmed" ff="monospace">
               {formatTimestamp(log.started_at)}
             </Text>
-            {getStatusBadge(log.status)}
           </Group>
           <Group gap="xs" wrap="nowrap">
-            <Badge variant="light" size="sm">
-              STT: {log.stt_provider}
-              {log.stt_model && ` (${log.stt_model})`}
-            </Badge>
-            {hasLLM && (
-              <Badge variant="light" size="sm" color="violet">
-                LLM: {log.llm_provider}
-                {log.llm_model && ` (${log.llm_model})`}
-              </Badge>
-            )}
-            {log.stt_duration_ms && (
+            {log.total_duration_ms && (
               <Badge
-                variant="outline"
-                size="sm"
-                leftSection={<Clock size={10} />}
-              >
-                {formatDuration(log.stt_duration_ms)}
-              </Badge>
-            )}
-            {log.llm_duration_ms && (
-              <Badge
-                variant="outline"
+                variant="light"
                 size="sm"
                 color="violet"
-                leftSection={<Clock size={10} />}
+                leftSection={<Clock size={12} />}
               >
-                {formatDuration(log.llm_duration_ms)}
+                Total: {formatDuration(log.total_duration_ms)}
               </Badge>
             )}
+            {getStatusBadge(log.status)}
           </Group>
         </Group>
       </Accordion.Control>
@@ -217,27 +216,41 @@ function RequestLogItem({ log }: { log: RequestLog }) {
           {(log.raw_transcript || log.final_text) && (
             <Paper withBorder p="sm">
               <Stack gap="xs">
-                {log.raw_transcript && (
+                {llmAttempted ? (
+                  <>
+                    {log.raw_transcript && (
+                      <Box>
+                        <Text size="xs" fw={600} c="dimmed">
+                          Raw Transcript:
+                        </Text>
+                        <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                          {log.raw_transcript || "(empty)"}
+                        </Text>
+                      </Box>
+                    )}
+                    {log.final_text &&
+                      (log.final_text !== log.raw_transcript ||
+                        llmAttempted) && (
+                        <Box>
+                          <Text size="xs" fw={600} c="dimmed">
+                            Final Output:
+                          </Text>
+                          <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                            {log.final_text}
+                          </Text>
+                        </Box>
+                      )}
+                  </>
+                ) : (
                   <Box>
                     <Text size="xs" fw={600} c="dimmed">
-                      Raw Transcript:
+                      Transcript:
                     </Text>
                     <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-                      {log.raw_transcript || "(empty)"}
+                      {log.final_text ?? log.raw_transcript ?? "(empty)"}
                     </Text>
                   </Box>
                 )}
-                {log.final_text &&
-                  (log.final_text !== log.raw_transcript || hasLLM) && (
-                    <Box>
-                      <Text size="xs" fw={600} c="dimmed">
-                        Final Output:
-                      </Text>
-                      <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-                        {log.final_text}
-                      </Text>
-                    </Box>
-                  )}
               </Stack>
             </Paper>
           )}
@@ -287,18 +300,16 @@ function RequestLogItem({ log }: { log: RequestLog }) {
 
           {/* Timing info */}
           {(log.stt_duration_ms || log.llm_duration_ms) && (
-            <Group gap="lg">
+            <Group gap="xs" wrap="wrap">
               {log.stt_duration_ms && (
-                <Text size="xs" c="dimmed">
-                  STT Duration:{" "}
-                  <strong>{formatDuration(log.stt_duration_ms)}</strong>
-                </Text>
+                <Badge variant="light" size="sm" color="gray">
+                  STT {formatDuration(log.stt_duration_ms)} · {sttMetaLabel}
+                </Badge>
               )}
               {log.llm_duration_ms && (
-                <Text size="xs" c="dimmed">
-                  LLM Duration:{" "}
-                  <strong>{formatDuration(log.llm_duration_ms)}</strong>
-                </Text>
+                <Badge variant="light" size="sm" color="gray">
+                  LLM {formatDuration(log.llm_duration_ms)} · {llmMetaLabel}
+                </Badge>
               )}
             </Group>
           )}
@@ -327,7 +338,37 @@ function RequestLogItem({ log }: { log: RequestLog }) {
           )}
 
           {/* Copy full log as JSON for debugging */}
-          <Group justify="flex-end">
+          <Group justify="flex-end" gap={4}>
+            {rawTranscript && (
+              <CopyButton value={rawTranscript}>
+                {({ copied, copy }) => (
+                  <Button
+                    variant="subtle"
+                    color={copied ? "teal" : "gray"}
+                    size="xs"
+                    leftSection={<Copy size={14} />}
+                    onClick={copy}
+                  >
+                    {copied ? "Copied!" : "Copy Raw"}
+                  </Button>
+                )}
+              </CopyButton>
+            )}
+            {llmRewrite && (
+              <CopyButton value={llmRewrite}>
+                {({ copied, copy }) => (
+                  <Button
+                    variant="subtle"
+                    color={copied ? "teal" : "gray"}
+                    size="xs"
+                    leftSection={<Copy size={14} />}
+                    onClick={copy}
+                  >
+                    {copied ? "Copied!" : "Copy Rewrite"}
+                  </Button>
+                )}
+              </CopyButton>
+            )}
             <CopyButton value={JSON.stringify(log, null, 2)}>
               {({ copied, copy }) => (
                 <Button
@@ -349,35 +390,26 @@ function RequestLogItem({ log }: { log: RequestLog }) {
 }
 
 export function LogsView() {
-	const { data: logs, refetch, isRefetching } = useRequestLogs(100);
-	const clearLogsMutation = useClearRequestLogs();
-	const [systemEvents, setSystemEvents] = useState<SystemEvent[]>([]);
+  const { data: logs } = useRequestLogs(100);
+  const clearLogsMutation = useClearRequestLogs();
+  const [systemEvents, setSystemEvents] = useState<SystemEvent[]>([]);
 
-	// Listen for system events from Rust
-	useEffect(() => {
-		const unlisten = listen<SystemEvent>("system-event", (event) => {
-			setSystemEvents((prev) => [event.payload, ...prev].slice(0, 50)); // Keep last 50
-		});
+  // Listen for system events from Rust
+  useEffect(() => {
+    const unlisten = listen<SystemEvent>("system-event", (event) => {
+      setSystemEvents((prev) => [event.payload, ...prev].slice(0, 50)); // Keep last 50
+    });
 
-		return () => {
-			unlisten.then((fn) => fn());
-		};
-	}, []);
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
-	return (
+  return (
     <Stack gap="md" style={{ width: "100%" }}>
       <Group justify="space-between" align="center">
         <Title order={3}>Request Logs</Title>
         <Group gap="xs">
-          <Tooltip label="Refresh logs">
-            <ActionIcon
-              variant="subtle"
-              onClick={() => refetch()}
-              loading={isRefetching}
-            >
-              <RefreshCw size={18} />
-            </ActionIcon>
-          </Tooltip>
           <Button
             variant="subtle"
             color="red"
