@@ -11,7 +11,9 @@ import {
 } from "../../lib/queries";
 import { tauriAPI } from "../../lib/tauri";
 
-const DEFAULT_STT_TIMEOUT = 0.8;
+// NOTE: This timeout is used by the Rust pipeline as a transcription request timeout.
+// Keep this default aligned with backend fallbacks so "unset" settings don't lie.
+const DEFAULT_STT_TIMEOUT = 60;
 
 // Model options for each STT provider
 const STT_MODELS: Record<string, { value: string; label: string }[]> = {
@@ -310,12 +312,14 @@ export function ProvidersSettings() {
               value={sliderValue}
               onChange={setSliderValue}
               onChangeEnd={handleSTTTimeoutChange}
-              min={0.5}
-              max={3.0}
-              step={0.1}
+              min={5}
+              max={120}
+              step={5}
               marks={[
-                { value: 0.5, label: "0.5s" },
-                { value: 3.0, label: "3.0s" },
+                { value: 5, label: "5s" },
+                { value: 30, label: "30s" },
+                { value: 60, label: "60s" },
+                { value: 120, label: "120s" },
               ]}
               styles={{
                 root: { flex: 1 },
@@ -326,7 +330,7 @@ export function ProvidersSettings() {
               }}
             />
             <Text size="xs" c="dimmed" style={{ minWidth: 32 }}>
-              {sliderValue.toFixed(1)}s
+              {Math.round(sliderValue)}s
             </Text>
           </div>
         </div>

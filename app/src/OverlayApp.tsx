@@ -409,7 +409,13 @@ function RecordingControl() {
     5000
   );
 
-  // Response timeout (30s for transcription)
+  // Response timeout: keep the UI watchdog aligned with the backend transcription timeout.
+  // Add a small buffer so the UI does not reset before the pipeline times out.
+  const responseTimeoutMs = Math.max(
+    10_000,
+    Math.round(((settings?.stt_timeout_seconds ?? 60) + 5) * 1000)
+  );
+
   const { start: startResponseTimeout, clear: clearResponseTimeout } =
     useTimeout(() => {
       if (pipelineState === "transcribing") {
@@ -417,7 +423,7 @@ function RecordingControl() {
         setPipelineState("idle");
         invoke("pipeline_force_reset").catch(console.error);
       }
-    }, 30000);
+    }, responseTimeoutMs);
 
   // Emit connection state changes to other windows
   useEffect(() => {

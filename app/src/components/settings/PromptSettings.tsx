@@ -45,7 +45,9 @@ const DEFAULT_SECTIONS: CleanupPromptSections = {
   dictionary: { enabled: false, content: null },
 };
 
-const DEFAULT_STT_TIMEOUT = 0.8;
+// NOTE: This timeout is used by the Rust pipeline as a transcription request timeout.
+// Keep this default aligned with backend fallbacks so "unset" settings don't lie.
+const DEFAULT_STT_TIMEOUT = 60;
 
 // Model options for each STT provider
 const STT_MODELS: Record<string, { value: string; label: string }[]> = {
@@ -924,7 +926,7 @@ export function PromptSettings({
                 return;
               }
 
-              const clamped = Math.max(0.5, Math.min(3.0, value));
+              const clamped = Math.max(5, Math.min(120, value));
               if (clamped !== value) {
                 setLocalProfileSttTimeout(clamped);
               }
@@ -937,9 +939,9 @@ export function PromptSettings({
               setSttTimeoutInheriting(false);
               saveProfileMetadata({ stt_timeout_seconds: clamped });
             }}
-            min={0.5}
-            max={3.0}
-            step={0.1}
+            min={5}
+            max={120}
+            step={5}
             clampBehavior="strict"
             styles={{
               input: {

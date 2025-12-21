@@ -73,6 +73,74 @@ fn get_setting_from_store<T: serde::de::DeserializeOwned>(
         .unwrap_or(default)
 }
 
+/// Ensure settings shown in the UI match what the backend will use.
+///
+/// The frontend often treats missing keys as "unset" and shows fallback defaults.
+/// If the backend uses different fallbacks, this can cause confusing mismatches.
+///
+/// To prevent that, we eagerly seed `settings.json` with defaults for missing/null keys
+/// (without overwriting any existing values).
+#[cfg(desktop)]
+fn ensure_default_settings(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    use serde_json::{json, Value};
+    use tauri_plugin_store::StoreExt;
+
+    let store = app.store("settings.json")?;
+
+    let is_missing = |v: Option<Value>| -> bool {
+        matches!(v, None | Some(Value::Null))
+    };
+
+    let mut dirty = false;
+    let mut set_if_missing = |key: &str, value: Value| {
+        if is_missing(store.get(key)) {
+            store.set(key.to_string(), value);
+            dirty = true;
+        }
+    };
+
+    // Keep these defaults aligned with pipeline defaults / expected backend behavior.
+    set_if_missing("stt_provider", json!("groq"));
+    set_if_missing("stt_timeout_seconds", json!(60.0));
+    set_if_missing("overlay_mode", json!("always"));
+    set_if_missing("widget_position", json!("bottom-right"));
+    set_if_missing("output_mode", json!("paste"));
+    set_if_missing("playing_audio_handling", json!("mute"));
+    set_if_missing("sound_enabled", json!(true));
+    set_if_missing("rewrite_llm_enabled", json!(false));
+    set_if_missing("rewrite_program_prompt_profiles", json!([]));
+
+    // Hotkeys: seed explicit defaults so both Rust and UI see the same persisted values.
+    set_if_missing(
+        "toggle_hotkey",
+        serde_json::to_value(HotkeyConfig::default_toggle())?,
+    );
+    set_if_missing(
+        "hold_hotkey",
+        serde_json::to_value(HotkeyConfig::default_hold())?,
+    );
+    set_if_missing(
+        "paste_last_hotkey",
+        serde_json::to_value(HotkeyConfig::default_paste_last())?,
+    );
+
+    // VAD settings are used by the pipeline.
+    set_if_missing(
+        "vad_settings",
+        serde_json::to_value(settings::VadSettings::default())?,
+    );
+
+    if dirty {
+        // Persist seeded defaults.
+        // If saving fails, we don't want to crash the app; the runtime fallbacks will still work.
+        if let Err(e) = store.save() {
+            log::warn!("Failed to save seeded default settings: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
 /// Emit a system event to the frontend for debugging
 #[cfg(desktop)]
 fn emit_system_event(app: &AppHandle, event_type: &str, message: &str, details: Option<&str>) {
@@ -825,6 +893,13 @@ pub fn run() {
             commands::windows::get_foreground_process_path,
         ])
         .setup(|app| {
+            // Seed defaults into settings.json so UI and backend agree on effective settings.
+            // Must run before pipeline initialization and any settings reads.
+            #[cfg(desktop)]
+            {
+                ensure_default_settings(app.handle())?;
+            }
+
             // Initialize history storage
             let app_data_dir = app
                 .path()
@@ -1039,7 +1114,16 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
     let stt_model: Option<String> = get_setting_from_store(app, "stt_model", None);
 
     // Read STT timeout from store (seconds)
-    let stt_timeout_seconds: f64 = get_setting_from_store(app, "stt_timeout_seconds", 60.0);
+    let stt_timeout_seconds_raw: f64 = get_setting_from_store(app, "stt_timeout_seconds", 60.0);
+    let stt_timeout_seconds: f64 = if stt_timeout_seconds_raw.is_finite() && stt_timeout_seconds_raw > 0.0 {
+        stt_timeout_seconds_raw
+    } else {
+        log::warn!(
+            "Invalid stt_timeout_seconds value in store ({}); falling back to 60s",
+            stt_timeout_seconds_raw
+        );
+        60.0
+    };
 
     // Read all available STT API keys (for per-profile provider overrides at runtime)
     let mut stt_api_keys: HashMap<String, String> = HashMap::new();

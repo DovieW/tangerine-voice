@@ -293,12 +293,23 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
     }
 
     // Read STT timeout from store (seconds)
-    let stt_timeout_seconds: f64 = app
+    let stt_timeout_seconds_raw: f64 = app
         .store("settings.json")
         .ok()
         .and_then(|store| store.get("stt_timeout_seconds"))
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or(60.0);
+
+    // Guard against invalid values (NaN/inf/<=0) to avoid Duration::from_secs_f64 panics.
+    let stt_timeout_seconds: f64 = if stt_timeout_seconds_raw.is_finite() && stt_timeout_seconds_raw > 0.0 {
+        stt_timeout_seconds_raw
+    } else {
+        log::warn!(
+            "Invalid stt_timeout_seconds value in store ({}); falling back to 60s",
+            stt_timeout_seconds_raw
+        );
+        60.0
+    };
 
     // Read LLM settings from store
     // NOTE: If the user has not selected an LLM provider yet, keep LLM disabled.
