@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::Duration;
 
-const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/responses";
 const DEFAULT_MODEL: &str = "gpt-4o-mini";
 
 /// OpenAI LLM provider using the Chat Completions API
@@ -64,81 +64,119 @@ impl OpenAiLlmProvider {
         model.starts_with("gpt-4.1")
     }
 
-    fn rewrite_response_format() -> ResponseFormat {
+    fn rewrite_response_format() -> TextFormat {
         // Keep the schema intentionally tiny: the app only needs the final rewritten text.
         // Rich field descriptions make the model's job (and prompt-writing) easier.
-        ResponseFormat {
+        // NOTE: For the Responses API, structured output is configured via `text.format`,
+        // and `name/strict/schema` are top-level fields under `format`.
+        // Docs: https://platform.openai.com/docs/guides/structured-outputs_api-mode=responses
+        TextFormat {
             format_type: "json_schema".to_string(),
-            json_schema: JsonSchemaFormat {
-                name: "rewrite_response".to_string(),
-                strict: true,
-                description: Some(
-                    "Structured output for a dictation transcript rewrite. The model must emit valid JSON matching the schema."
-                        .to_string(),
-                ),
-                schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "rewritten_text": {
-                            "type": "string",
-                            "description": "The final rewritten transcript text. This string will be used directly as the output. Preserve meaning, intent, and any required formatting. Do not wrap in markdown or add extra commentary. Return an empty string only if the input transcript is empty."
-                        }
-                    },
-                    "required": ["rewritten_text"],
-                    "additionalProperties": false
-                }),
-            },
+            name: Some("rewrite_response".to_string()),
+            strict: Some(true),
+            description: Some(
+                "Structured output for a dictation transcript rewrite. The model must emit valid JSON matching the schema."
+                    .to_string(),
+            ),
+            schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "rewritten_text": {
+                        "type": "string",
+                        "description": "The final rewritten transcript text. This string will be used directly as the output. Preserve meaning, intent, and any required formatting. Do not wrap in markdown or add extra commentary. Return an empty string only if the input transcript is empty."
+                    }
+                },
+                "required": ["rewritten_text"],
+                "additionalProperties": false
+            })),
         }
+    }
+
+    fn extract_responses_output_text(value: &serde_json::Value) -> Result<String, LlmError> {
+        // Prefer the SDK-style convenience field when present.
+        if let Some(s) = value.get("output_text").and_then(|v| v.as_str()) {
+            return Ok(s.to_string());
+        }
+
+        let output = value
+            .get("output")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                LlmError::InvalidResponse("Responses API returned no 'output' array".to_string())
+            })?;
+
+        for item in output {
+            if item.get("type").and_then(|t| t.as_str()) != Some("message") {
+                continue;
+            }
+
+            let content = match item.get("content").and_then(|c| c.as_array()) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            for part in content {
+                match part.get("type").and_then(|t| t.as_str()) {
+                    Some("refusal") => {
+                        let refusal = part
+                            .get("refusal")
+                            .and_then(|r| r.as_str())
+                            .unwrap_or("");
+                        return Err(LlmError::Api(format!(
+                            "OpenAI refusal: {}",
+                            refusal
+                        )));
+                    }
+                    Some("output_text") => {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            return Ok(text.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Err(LlmError::InvalidResponse(
+            "Responses API returned no output_text content".to_string(),
+        ))
     }
 }
 
 #[derive(Debug, Serialize)]
-struct ChatMessage {
+struct ResponsesRequest {
+    model: String,
+    input: Vec<ResponseInputMessage>,
+    max_output_tokens: u32,
+    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<TextConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponseInputMessage {
     role: String,
     content: String,
 }
 
 #[derive(Debug, Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    max_tokens: u32,
-    temperature: f32,
+struct TextConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    response_format: Option<ResponseFormat>,
+    format: Option<TextFormat>,
 }
 
 #[derive(Debug, Serialize)]
-struct ResponseFormat {
+struct TextFormat {
     #[serde(rename = "type")]
     format_type: String,
-    json_schema: JsonSchemaFormat,
-}
-
-#[derive(Debug, Serialize)]
-struct JsonSchemaFormat {
-    name: String,
-    strict: bool,
-    schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatChoice {
-    message: ChatResponseMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponseMessage {
-    content: String,
-    #[serde(default)]
-    refusal: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,22 +209,23 @@ impl LlmProvider for OpenAiLlmProvider {
             system_prompt.to_string()
         };
 
-        let request = ChatRequest {
+        let request = ResponsesRequest {
             model: self.model.clone(),
-            messages: vec![
-                ChatMessage {
+            input: vec![
+                ResponseInputMessage {
                     role: "system".to_string(),
                     content: system_prompt,
                 },
-                ChatMessage {
+                ResponseInputMessage {
                     role: "user".to_string(),
                     content: user_message.to_string(),
                 },
             ],
-            max_tokens: 4096,
-            temperature: 0.3, // Lower temperature for more consistent formatting
-            response_format: use_structured_outputs
-                .then(|| Self::rewrite_response_format()),
+            max_output_tokens: 4096,
+            temperature: 0.0, // Deterministic formatting/rewrite
+            text: use_structured_outputs.then(|| TextConfig {
+                format: Some(Self::rewrite_response_format()),
+            }),
         };
 
         let response = self
@@ -221,24 +260,17 @@ impl LlmProvider for OpenAiLlmProvider {
             )));
         }
 
-        let chat_response: ChatResponse = response.json().await.map_err(|e| {
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
             LlmError::InvalidResponse(format!("Failed to parse response: {}", e))
         })?;
 
-        let first = chat_response
-            .choices
-            .first()
-            .ok_or_else(|| LlmError::InvalidResponse("No response choices returned".to_string()))?;
-
-        if let Some(refusal) = &first.message.refusal {
-            return Err(LlmError::Api(format!("OpenAI refusal: {}", refusal)));
-        }
+        let output_text = Self::extract_responses_output_text(&response_json)?;
 
         if use_structured_outputs {
-            let v: serde_json::Value = serde_json::from_str(&first.message.content).map_err(|e| {
+            let v: serde_json::Value = serde_json::from_str(&output_text).map_err(|e| {
                 LlmError::InvalidResponse(format!(
                     "Structured output was not valid JSON: {} (content: {})",
-                    e, first.message.content
+                    e, output_text
                 ))
             })?;
 
@@ -248,13 +280,13 @@ impl LlmProvider for OpenAiLlmProvider {
                 .ok_or_else(|| {
                     LlmError::InvalidResponse(format!(
                         "Structured output missing required field 'rewritten_text' (content: {})",
-                        first.message.content
+                        output_text
                     ))
                 })?;
 
             Ok(rewritten.to_string())
         } else {
-            Ok(first.message.content.clone())
+            Ok(output_text)
         }
     }
 

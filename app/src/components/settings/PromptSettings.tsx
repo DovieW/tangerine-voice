@@ -102,6 +102,22 @@ const LLM_MODELS: Record<string, { value: string; label: string }[]> = {
 
 type SectionKey = "main" | "advanced" | "dictionary";
 
+function errorToMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const anyErr = err as any;
+    if (typeof anyErr.message === "string") return anyErr.message;
+    if (typeof anyErr.error === "string") return anyErr.error;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
+
 interface LocalSectionState {
   enabled: boolean;
   content: string;
@@ -1075,11 +1091,7 @@ export function PromptSettings({
                                     );
                                   }
 
-                                  const message =
-                                    err instanceof Error
-                                      ? err.message
-                                      : String(err);
-                                  setSttTestError(message);
+                                  setSttTestError(errorToMessage(err));
                                 },
                               }
                             );
@@ -1413,9 +1425,7 @@ export function PromptSettings({
                             );
                           },
                           onError: (err) => {
-                            const message =
-                              err instanceof Error ? err.message : String(err);
-                            setRewriteTestError(message);
+                            setRewriteTestError(errorToMessage(err));
                           },
                         }
                       );

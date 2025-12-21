@@ -2,7 +2,7 @@
 //!
 //! Supports two modes:
 //! - Legacy Whisper API (whisper-1) - uses /v1/audio/transcriptions
-//! - GPT-4o Audio Preview - uses /v1/chat/completions with audio input
+//! - Audio chat models (e.g., gpt-4o-audio-preview) - uses /v1/responses with audio input
 
 use super::{AudioFormat, SttError, SttProvider};
 use async_trait::async_trait;
@@ -49,17 +49,16 @@ impl OpenAiSttProvider {
         }
     }
 
-    /// Check if using an OpenAI chat-completions audio model.
+    /// Check if this model should use /v1/audio/transcriptions.
     ///
-    /// We treat any non-Whisper model that contains "audio" as a chat-completions
-    /// audio model (e.g., gpt-4o-audio-preview, gpt-4o-mini-audio-preview, gpt-audio,
-    /// gpt-audio-mini).
-    fn is_chat_audio_model(&self) -> bool {
-        self.model != "whisper-1" && self.model.contains("audio")
+    /// Per OpenAI docs, `whisper-1` and the `*-transcribe` models are used via the
+    /// dedicated transcription endpoint.
+    fn uses_transcriptions_endpoint(&self) -> bool {
+        self.model == "whisper-1" || self.model.contains("transcribe")
     }
 
-    /// Transcribe using the legacy Whisper API
-    async fn transcribe_whisper(&self, audio: &[u8]) -> Result<String, SttError> {
+    /// Transcribe using the dedicated OpenAI transcription endpoint.
+    async fn transcribe_audio_transcriptions(&self, audio: &[u8]) -> Result<String, SttError> {
         let part = multipart::Part::bytes(audio.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")
@@ -96,8 +95,52 @@ impl OpenAiSttProvider {
         Ok(text)
     }
 
-    /// Transcribe using GPT-4o audio chat completions API
-    async fn transcribe_gpt4o(&self, audio: &[u8]) -> Result<String, SttError> {
+    fn extract_responses_output_text(value: &serde_json::Value) -> Result<String, SttError> {
+        if let Some(s) = value.get("output_text").and_then(|v| v.as_str()) {
+            return Ok(s.to_string());
+        }
+
+        let output = value
+            .get("output")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| SttError::Api("Responses API returned no 'output' array".to_string()))?;
+
+        for item in output {
+            if item.get("type").and_then(|t| t.as_str()) != Some("message") {
+                continue;
+            }
+
+            let content = match item.get("content").and_then(|c| c.as_array()) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            for part in content {
+                match part.get("type").and_then(|t| t.as_str()) {
+                    Some("refusal") => {
+                        let refusal = part
+                            .get("refusal")
+                            .and_then(|r| r.as_str())
+                            .unwrap_or("");
+                        return Err(SttError::Api(format!("OpenAI refusal: {}", refusal)));
+                    }
+                    Some("output_text") => {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            return Ok(text.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Err(SttError::Api(
+            "Responses API returned no output_text content".to_string(),
+        ))
+    }
+
+    /// Transcribe using the Responses API with audio input.
+    async fn transcribe_responses_audio(&self, audio: &[u8]) -> Result<String, SttError> {
         use base64::{engine::general_purpose::STANDARD, Engine};
 
         // Encode audio as base64
@@ -105,8 +148,7 @@ impl OpenAiSttProvider {
 
         let request_body = json!({
             "model": self.model,
-            "modalities": ["text"],
-            "messages": [
+            "input": [
                 {
                     "role": "user",
                     "content": [
@@ -123,12 +165,15 @@ impl OpenAiSttProvider {
                         }
                     ]
                 }
-            ]
+            ],
+            "text": {
+                "format": {"type": "text"}
+            }
         });
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post("https://api.openai.com/v1/responses")
             .bearer_auth(&self.api_key)
             .json(&request_body)
             .send()
@@ -148,25 +193,17 @@ impl OpenAiSttProvider {
         }
 
         let result: serde_json::Value = response.json().await?;
-
-        // Extract text from chat completion response
-        let text = result["choices"]
-            .get(0)
-            .and_then(|c| c["message"]["content"].as_str())
-            .unwrap_or("")
-            .to_string();
-
-        Ok(text)
+        Self::extract_responses_output_text(&result)
     }
 }
 
 #[async_trait]
 impl SttProvider for OpenAiSttProvider {
     async fn transcribe(&self, audio: &[u8], _format: &AudioFormat) -> Result<String, SttError> {
-        if self.is_chat_audio_model() {
-            self.transcribe_gpt4o(audio).await
+        if self.uses_transcriptions_endpoint() {
+            self.transcribe_audio_transcriptions(audio).await
         } else {
-            self.transcribe_whisper(audio).await
+            self.transcribe_responses_audio(audio).await
         }
     }
 
@@ -196,26 +233,32 @@ mod tests {
     #[test]
     fn test_is_chat_audio_model() {
         let provider = OpenAiSttProvider::new("test-key".to_string(), None);
-        assert!(provider.is_chat_audio_model());
+        assert!(!provider.uses_transcriptions_endpoint());
 
         let provider = OpenAiSttProvider::new(
             "test-key".to_string(),
             Some("gpt-4o-mini-audio-preview".to_string()),
         );
-        assert!(provider.is_chat_audio_model());
+        assert!(!provider.uses_transcriptions_endpoint());
 
         let provider =
             OpenAiSttProvider::new("test-key".to_string(), Some("gpt-audio".to_string()));
-        assert!(provider.is_chat_audio_model());
+        assert!(!provider.uses_transcriptions_endpoint());
 
         let provider = OpenAiSttProvider::new(
             "test-key".to_string(),
             Some("gpt-audio-mini".to_string()),
         );
-        assert!(provider.is_chat_audio_model());
+        assert!(!provider.uses_transcriptions_endpoint());
 
         let provider =
             OpenAiSttProvider::new("test-key".to_string(), Some("whisper-1".to_string()));
-        assert!(!provider.is_chat_audio_model());
+        assert!(provider.uses_transcriptions_endpoint());
+
+        let provider = OpenAiSttProvider::new(
+            "test-key".to_string(),
+            Some("gpt-4o-transcribe".to_string()),
+        );
+        assert!(provider.uses_transcriptions_endpoint());
     }
 }
