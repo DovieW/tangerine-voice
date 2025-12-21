@@ -394,92 +394,105 @@ export function useResetHotkeysToDefaults() {
 
 // History queries and mutations
 export function useHistory(limit?: number) {
-	return useQuery({
-		queryKey: ["history", limit],
-		queryFn: () => tauriAPI.getHistory(limit),
-	});
+  return useQuery({
+    queryKey: ["history", limit],
+    queryFn: () => tauriAPI.getHistory(limit),
+  });
 }
 
 export function useAddHistoryEntry() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (text: string) => tauriAPI.addHistoryEntry(text),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["history"] });
-			// Notify other windows about history change
-			tauriAPI.emitHistoryChanged();
-		},
-	});
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (text: string) => tauriAPI.addHistoryEntry(text),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["history"] });
+      // Notify other windows about history change
+      tauriAPI.emitHistoryChanged();
+    },
+  });
 }
 
 export function useDeleteHistoryEntry() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (id: string) => tauriAPI.deleteHistoryEntry(id),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["history"] });
-			// Notify other windows about history change
-			tauriAPI.emitHistoryChanged();
-		},
-	});
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => tauriAPI.deleteHistoryEntry(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["history"] });
+      // Notify other windows about history change
+      tauriAPI.emitHistoryChanged();
+    },
+  });
 }
 
 export function useClearHistory() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: () => tauriAPI.clearHistory(),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["history"] });
-			// Notify other windows about history change
-			tauriAPI.emitHistoryChanged();
-		},
-	});
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => tauriAPI.clearHistory(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["history"] });
+      // Notify other windows about history change
+      tauriAPI.emitHistoryChanged();
+    },
+  });
 }
 
 // Config API queries and mutations (now using Tauri commands)
 export function useDefaultSections() {
-	return useQuery({
-		queryKey: ["defaultSections"],
-		queryFn: () => configAPI.getDefaultSections(),
-		staleTime: Number.POSITIVE_INFINITY, // Default prompts never change
-	});
+  return useQuery({
+    queryKey: ["defaultSections"],
+    queryFn: () => configAPI.getDefaultSections(),
+    staleTime: Number.POSITIVE_INFINITY, // Default prompts never change
+  });
 }
 
 // Provider queries and mutations
 
 export function useAvailableProviders() {
-	return useQuery({
-		queryKey: ["availableProviders"],
-		queryFn: () => configAPI.getAvailableProviders(),
-	});
+  return useQuery({
+    queryKey: ["availableProviders"],
+    queryFn: () => configAPI.getAvailableProviders(),
+  });
 }
 
 export function useUpdateSTTProvider() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: async (provider: string | null) => {
-			await tauriAPI.updateSTTProvider(provider);
-			// Sync the pipeline configuration when STT provider changes
-			await configAPI.syncPipelineConfig();
-		},
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["settings"] });
-		},
-	});
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (provider: string | null) => {
+      await tauriAPI.updateSTTProvider(provider);
+      // Sync the pipeline configuration when STT provider changes
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
 }
 
 export function useUpdateSTTModel() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: async (model: string | null) => {
-			await tauriAPI.updateSTTModel(model);
-			// Sync the pipeline configuration when STT model changes
-			await configAPI.syncPipelineConfig();
-		},
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["settings"] });
-		},
-	});
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (model: string | null) => {
+      await tauriAPI.updateSTTModel(model);
+      // Sync the pipeline configuration when STT model changes
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateSTTTranscriptionPrompt() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (prompt: string | null) => {
+      await tauriAPI.updateSTTTranscriptionPrompt(prompt);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
 }
 
 export function useUpdateLLMProvider() {

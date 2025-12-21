@@ -29,6 +29,7 @@ import {
   useUpdateRewriteLlmEnabled,
   useUpdateSTTModel,
   useUpdateSTTProvider,
+  useUpdateSTTTranscriptionPrompt,
   useUpdateSTTTimeout,
 } from "../../lib/queries";
 import {
@@ -66,7 +67,7 @@ const STT_MODELS: Record<string, { value: string; label: string }[]> = {
     // { value: "gpt-4o-mini-audio-preview", label: "GPT-4o Mini Audio Preview" },
     { value: "gpt-4o-transcribe", label: "GPT-4o Transcribe" },
     { value: "gpt-4o-mini-transcribe", label: "GPT-4o Mini Transcribe" },
-    // { value: "whisper-1", label: "Whisper" },
+    { value: "whisper-1", label: "Whisper-1" },
   ],
   deepgram: [
     { value: "nova-2", label: "Nova 2" },
@@ -159,6 +160,7 @@ export function PromptSettings({
   // Default profile (global) provider settings
   const updateSTTProvider = useUpdateSTTProvider();
   const updateSTTModel = useUpdateSTTModel();
+  const updateSTTTranscriptionPrompt = useUpdateSTTTranscriptionPrompt();
   const updateLLMProvider = useUpdateLLMProvider();
   const updateLLMModel = useUpdateLLMModel();
   const updateSTTTimeout = useUpdateSTTTimeout();
@@ -205,6 +207,8 @@ export function PromptSettings({
   const [sttTestDurationMs, setSttTestDurationMs] = useState<number | null>(
     null
   );
+  const [localSttTranscriptionPrompt, setLocalSttTranscriptionPrompt] =
+    useState<string>("");
   const sttTestStartRef = useRef<number | null>(null);
 
   const [resetDialog, setResetDialog] = useState<null | {
@@ -438,10 +442,84 @@ export function PromptSettings({
     activeProfileId === "default"
       ? settings?.stt_provider ?? null
       : localProfileSttProvider ?? settings?.stt_provider ?? null;
+  const effectiveSttModel =
+    activeProfileId === "default"
+      ? settings?.stt_model ?? null
+      : localProfileSttModel ?? settings?.stt_model ?? null;
   const effectiveLlmProvider =
     activeProfileId === "default"
       ? settings?.llm_provider ?? null
       : localProfileLlmProvider ?? settings?.llm_provider ?? null;
+
+  const isOpenAiStt = effectiveSttProvider === "openai";
+  const isGroqStt = effectiveSttProvider === "groq";
+  const isWhisper1Selected = isOpenAiStt && effectiveSttModel === "whisper-1";
+  const isGroqWhisperModel =
+    isGroqStt &&
+    (effectiveSttModel === null ||
+      Boolean(effectiveSttModel?.includes("whisper")));
+
+  const promptMaxChars = 224;
+  const isPrompt224CharLimited = isWhisper1Selected || isGroqWhisperModel;
+
+  const sttPromptSupported =
+    (isOpenAiStt &&
+      (effectiveSttModel === "whisper-1" ||
+        (Boolean(effectiveSttModel?.includes("transcribe")) &&
+          !effectiveSttModel?.includes("diarize")))) ||
+    isGroqWhisperModel;
+
+  const sttPromptDisabledReason = useMemo(() => {
+    if (!effectiveSttProvider) {
+      return "Select an STT provider to enable transcription prompting.";
+    }
+
+    if (effectiveSttProvider === "openai") {
+      const modelLabel = effectiveSttModel ?? "default";
+      return `The selected OpenAI model (${modelLabel}) does not support transcription prompting.`;
+    }
+
+    if (effectiveSttProvider === "groq") {
+      const modelLabel = effectiveSttModel ?? "default";
+      return `The selected Groq model (${modelLabel}) does not support transcription prompting.`;
+    }
+
+    return "Transcription prompt is supported for OpenAI transcription models and Groq Whisper models.";
+  }, [effectiveSttProvider, effectiveSttModel]);
+
+  // Keep the local UI state in sync with persisted settings.
+  useEffect(() => {
+    setLocalSttTranscriptionPrompt(settings?.stt_transcription_prompt ?? "");
+  }, [settings?.stt_transcription_prompt]);
+
+  // Debounced save (global setting). We only allow editing/saving when supported.
+  useEffect(() => {
+    if (!sttPromptSupported) return;
+
+    const normalized = localSttTranscriptionPrompt.trim();
+    const toStore: string | null = normalized.length > 0 ? normalized : null;
+    const storedNormalized: string | null =
+      settings?.stt_transcription_prompt?.trim() || null;
+
+    if (toStore === storedNormalized) return;
+
+    const handle = window.setTimeout(() => {
+      updateSTTTranscriptionPrompt.mutate(toStore, {
+        onSuccess: () => {
+          tauriAPI.emitSettingsChanged();
+        },
+      });
+    }, 500);
+
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [
+    localSttTranscriptionPrompt,
+    settings?.stt_transcription_prompt,
+    sttPromptSupported,
+    updateSTTTranscriptionPrompt,
+  ]);
 
   const sttModelOptions = effectiveSttProvider
     ? STT_MODELS[effectiveSttProvider] ?? []
@@ -1007,6 +1085,92 @@ export function PromptSettings({
 
       <div style={{ marginTop: 16, marginBottom: 16 }}>
         <Accordion variant="separated" radius="md">
+          <Accordion.Item value={`${activeProfileId}-stt-prompt`}>
+            <Accordion.Control>
+              <Tooltip
+                label={sttPromptDisabledReason}
+                withArrow
+                disabled={sttPromptSupported}
+              >
+                <div style={{ opacity: sttPromptSupported ? 1 : 0.5 }}>
+                  <p className="settings-label">Transcription prompt</p>
+                  <p className="settings-description">
+                    Optional context used during transcription.
+                  </p>
+                </div>
+              </Tooltip>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                <div style={{ width: "100%" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      marginBottom: 6,
+                    }}
+                  >
+                    <Text size="sm" c="dimmed">
+                      Prompt (optional)
+                    </Text>
+                    {isPrompt224CharLimited ? (
+                      <Text size="xs" c="dimmed">
+                        {localSttTranscriptionPrompt.length}/{promptMaxChars}{" "}
+                        chars
+                      </Text>
+                    ) : null}
+                  </div>
+
+                  <Textarea
+                    value={localSttTranscriptionPrompt}
+                    onChange={(e) => {
+                      const next = e.currentTarget.value;
+
+                      if (
+                        isPrompt224CharLimited &&
+                        next.length > promptMaxChars
+                      ) {
+                        setLocalSttTranscriptionPrompt(
+                          next.slice(0, promptMaxChars)
+                        );
+                        return;
+                      }
+
+                      setLocalSttTranscriptionPrompt(next);
+                    }}
+                    disabled={!sttPromptSupported}
+                    placeholder={"Prompt"}
+                    autosize
+                    minRows={2}
+                    maxLength={
+                      isPrompt224CharLimited ? promptMaxChars : undefined
+                    }
+                    styles={{
+                      input: {
+                        backgroundColor: "var(--bg-elevated)",
+                        borderColor: "var(--border-default)",
+                        color: "var(--text-primary)",
+                        fontFamily: "monospace",
+                        fontSize: "13px",
+                      },
+                    }}
+                  />
+
+                  <Text size="xs" c="dimmed" style={{ marginTop: 6 }}>
+                    OpenAI transcription models and Groq Whisper models accept
+                    an optional <code>prompt</code>. For Whisper-style models,
+                    docs commonly note only the first 224 tokens are considered;
+                    this UI conservatively limits it to 224 characters.
+                  </Text>
+                </div>
+              </div>
+            </Accordion.Panel>
+          </Accordion.Item>
+
           <Accordion.Item value={`${activeProfileId}-stt-test`}>
             <Accordion.Control>
               <div>
@@ -1069,7 +1233,9 @@ export function PromptSettings({
                             sttTestStartRef.current = performance.now();
 
                             testSttLastAudio.mutate(
-                              { profileId: activeProfileId },
+                              {
+                                profileId: activeProfileId,
+                              },
                               {
                                 onSuccess: (res) => {
                                   const startedAt = sttTestStartRef.current;
@@ -1108,6 +1274,15 @@ export function PromptSettings({
                   {sttTestError ? (
                     <Text size="sm" c="red" style={{ marginBottom: 8 }}>
                       {sttTestError}
+                    </Text>
+                  ) : null}
+
+                  {sttPromptSupported &&
+                  (settings?.stt_transcription_prompt ?? "").trim().length >
+                    0 ? (
+                    <Text size="xs" c="dimmed" style={{ marginBottom: 8 }}>
+                      Test transcription will include your global transcription
+                      prompt.
                     </Text>
                   ) : null}
 

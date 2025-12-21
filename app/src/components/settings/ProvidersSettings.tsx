@@ -28,7 +28,7 @@ const STT_MODELS: Record<string, { value: string; label: string }[]> = {
     // { value: "gpt-4o-mini-audio-preview", label: "GPT-4o Mini Audio Preview" },
     { value: "gpt-4o-transcribe", label: "GPT-4o Transcribe" },
     { value: "gpt-4o-mini-transcribe", label: "GPT-4o Mini Transcribe" },
-    // { value: "whisper-1", label: "Whisper" },
+    { value: "whisper-1", label: "Whisper-1" },
   ],
   deepgram: [
     { value: "nova-2", label: "Nova 2" },

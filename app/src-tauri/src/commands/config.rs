@@ -266,6 +266,13 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         .and_then(|store| store.get("stt_model"))
         .and_then(|v| serde_json::from_value(v).ok());
 
+    // Read global STT transcription prompt from store
+    let stt_transcription_prompt: Option<String> = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("stt_transcription_prompt"))
+        .and_then(|v| serde_json::from_value(v).ok());
+
     // Get the appropriate API key based on provider
     let stt_api_key: String = {
         let key_name = format!("{}_api_key", stt_provider);
@@ -461,6 +468,7 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         stt_api_key,
         stt_api_keys,
         stt_model: stt_model.clone(),
+        stt_transcription_prompt,
         max_duration_secs: 300.0,
         retry_config: RetryConfig::default(),
         vad_config: vad_settings.to_vad_auto_stop_config(),

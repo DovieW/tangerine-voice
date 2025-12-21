@@ -125,6 +125,8 @@ export interface AppSettings {
   rewrite_program_prompt_profiles: RewriteProgramPromptProfile[];
   stt_provider: string | null;
   stt_model: string | null;
+  // Global STT prompt (applies to all transcriptions when supported by the selected provider/model)
+  stt_transcription_prompt: string | null;
   llm_provider: string | null;
   llm_model: string | null;
   playing_audio_handling: PlayingAudioHandling;
@@ -455,6 +457,8 @@ export const tauriAPI = {
       rewrite_program_prompt_profiles,
       stt_provider: (await store.get<string | null>("stt_provider")) ?? null,
       stt_model: (await store.get<string | null>("stt_model")) ?? null,
+      stt_transcription_prompt:
+        (await store.get<string | null>("stt_transcription_prompt")) ?? null,
       llm_provider: (await store.get<string | null>("llm_provider")) ?? null,
       llm_model: (await store.get<string | null>("llm_model")) ?? null,
       playing_audio_handling: normalizePlayingAudioHandling(
@@ -554,6 +558,12 @@ export const tauriAPI = {
   async updateSTTModel(model: string | null): Promise<void> {
     const store = await getStore();
     await store.set("stt_model", model);
+    await store.save();
+  },
+
+  async updateSTTTranscriptionPrompt(prompt: string | null): Promise<void> {
+    const store = await getStore();
+    await store.set("stt_transcription_prompt", prompt);
     await store.save();
   },
 

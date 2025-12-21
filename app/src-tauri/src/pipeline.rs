@@ -273,6 +273,11 @@ pub struct PipelineConfig {
     pub stt_api_keys: HashMap<String, String>,
     /// Optional model override for STT
     pub stt_model: Option<String>,
+
+    /// Optional global transcription prompt.
+    ///
+    /// Applied by STT providers that support prompting (currently OpenAI transcription endpoint models).
+    pub stt_transcription_prompt: Option<String>,
     /// Retry configuration for STT requests
     pub retry_config: RetryConfig,
     /// VAD auto-stop configuration
@@ -307,6 +312,7 @@ impl Default for PipelineConfig {
             stt_api_key: String::new(),
             stt_api_keys: HashMap::new(),
             stt_model: None,
+            stt_transcription_prompt: None,
             retry_config: RetryConfig::default(),
             vad_config: VadAutoStopConfig::default(),
             transcription_timeout: DEFAULT_TRANSCRIPTION_TIMEOUT,
@@ -400,8 +406,16 @@ impl PipelineInner {
         }
 
         let provider: Arc<dyn SttProvider> = match provider_id.as_str() {
-            "openai" => Arc::new(crate::stt::OpenAiSttProvider::new(api_key, model)),
-            "groq" => Arc::new(crate::stt::GroqSttProvider::new(api_key, model)),
+            "openai" => Arc::new(crate::stt::OpenAiSttProvider::new(
+                api_key,
+                model,
+                self.config.stt_transcription_prompt.clone(),
+            )),
+            "groq" => Arc::new(crate::stt::GroqSttProvider::new(
+                api_key,
+                model,
+                self.config.stt_transcription_prompt.clone(),
+            )),
             "deepgram" => Arc::new(crate::stt::DeepgramSttProvider::new(api_key, model)),
             other => {
                 return Err(PipelineError::Config(format!(
@@ -746,7 +760,10 @@ impl SharedPipeline {
                 let provider = stt_provider.clone();
                 let wav = wav.clone();
                 let format = format.clone();
-                async move { provider.transcribe(wav.as_slice(), &format).await }
+
+                async move {
+                    provider.transcribe(wav.as_slice(), &format).await
+                }
             })
             .await
         };

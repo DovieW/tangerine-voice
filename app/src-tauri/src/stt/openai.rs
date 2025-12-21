@@ -15,9 +15,12 @@ pub struct OpenAiSttProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    default_prompt: Option<String>,
 }
 
 impl OpenAiSttProvider {
+    const WHISPER_PROMPT_MAX_CHARS: usize = 224;
+
     /// Create a new OpenAI STT provider
     ///
     /// # Arguments
@@ -26,7 +29,7 @@ impl OpenAiSttProvider {
     ///   - "gpt-4o-audio-preview" (default) - GPT-4o with audio input
     ///   - "gpt-4o-mini-audio-preview" - Smaller/faster GPT-4o audio
     ///   - "whisper-1" - Legacy Whisper API
-    pub fn new(api_key: String, model: Option<String>) -> Self {
+    pub fn new(api_key: String, model: Option<String>, default_prompt: Option<String>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120)) // Longer timeout for GPT-4o
             .build()
@@ -36,16 +39,31 @@ impl OpenAiSttProvider {
             client,
             api_key,
             model: model.unwrap_or_else(|| "gpt-4o-audio-preview".to_string()),
+            default_prompt: default_prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
         }
     }
 
     /// Create a new provider with a custom HTTP client
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn with_client(client: reqwest::Client, api_key: String, model: Option<String>) -> Self {
+    pub fn with_client(
+        client: reqwest::Client,
+        api_key: String,
+        model: Option<String>,
+        default_prompt: Option<String>,
+    ) -> Self {
         Self {
             client,
             api_key,
             model: model.unwrap_or_else(|| "gpt-4o-audio-preview".to_string()),
+            default_prompt: default_prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
         }
     }
 
@@ -57,16 +75,47 @@ impl OpenAiSttProvider {
         self.model == "whisper-1" || self.model.contains("transcribe")
     }
 
+    fn clamp_prompt_for_model(&self, prompt: Option<&str>) -> Option<String> {
+        let prompt = prompt.map(str::trim).filter(|s| !s.is_empty())?;
+
+        // Prompt support is only enabled for the dedicated transcription endpoint models.
+        // If the user selected an OpenAI audio-chat model (Responses API path), ignore the prompt.
+        if !self.uses_transcriptions_endpoint() {
+            return None;
+        }
+
+        // Diarize models do not support the `prompt` parameter.
+        if self.model.contains("diarize") {
+            return None;
+        }
+
+        // OpenAI docs say Whisper only considers 224 tokens. Tokenization differs by language.
+        // For a simple, predictable UX (and to match our UI), we clamp to 224 characters.
+        if self.model == "whisper-1" && prompt.len() > Self::WHISPER_PROMPT_MAX_CHARS {
+            return Some(prompt.chars().take(Self::WHISPER_PROMPT_MAX_CHARS).collect());
+        }
+
+        Some(prompt.to_string())
+    }
+
     /// Transcribe using the dedicated OpenAI transcription endpoint.
-    async fn transcribe_audio_transcriptions(&self, audio: &[u8]) -> Result<String, SttError> {
+    async fn transcribe_audio_transcriptions(
+        &self,
+        audio: &[u8],
+        prompt: Option<&str>,
+    ) -> Result<String, SttError> {
         let part = multipart::Part::bytes(audio.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")
             .map_err(|e| SttError::Audio(format!("Failed to create multipart: {}", e)))?;
 
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .part("file", part)
             .text("model", self.model.clone());
+
+        if let Some(prompt) = self.clamp_prompt_for_model(prompt) {
+            form = form.text("prompt", prompt);
+        }
 
         let response = self
             .client
@@ -140,11 +189,21 @@ impl OpenAiSttProvider {
     }
 
     /// Transcribe using the Responses API with audio input.
-    async fn transcribe_responses_audio(&self, audio: &[u8]) -> Result<String, SttError> {
+    async fn transcribe_responses_audio(
+        &self,
+        audio: &[u8],
+        prompt: Option<&str>,
+    ) -> Result<String, SttError> {
         use base64::{engine::general_purpose::STANDARD, Engine};
 
         // Encode audio as base64
         let audio_base64 = STANDARD.encode(audio);
+
+        let mut instruction = "Transcribe this audio. Output only the transcribed text, nothing else.".to_string();
+        if let Some(prompt) = self.clamp_prompt_for_model(prompt) {
+            instruction.push_str("\n\nContext/prompt: ");
+            instruction.push_str(&prompt);
+        }
 
         let request_body = json!({
             "model": self.model,
@@ -161,7 +220,7 @@ impl OpenAiSttProvider {
                         },
                         {
                             "type": "text",
-                            "text": "Transcribe this audio. Output only the transcribed text, nothing else."
+                            "text": instruction
                         }
                     ]
                 }
@@ -195,16 +254,29 @@ impl OpenAiSttProvider {
         let result: serde_json::Value = response.json().await?;
         Self::extract_responses_output_text(&result)
     }
+
+    /// Transcribe with an optional prompt.
+    ///
+    /// This is primarily used by the Settings "Test transcription" UI.
+    pub async fn transcribe_with_prompt(
+        &self,
+        audio: &[u8],
+        _format: &AudioFormat,
+        prompt: Option<&str>,
+    ) -> Result<String, SttError> {
+        if self.uses_transcriptions_endpoint() {
+            self.transcribe_audio_transcriptions(audio, prompt).await
+        } else {
+            self.transcribe_responses_audio(audio, prompt).await
+        }
+    }
 }
 
 #[async_trait]
 impl SttProvider for OpenAiSttProvider {
     async fn transcribe(&self, audio: &[u8], _format: &AudioFormat) -> Result<String, SttError> {
-        if self.uses_transcriptions_endpoint() {
-            self.transcribe_audio_transcriptions(audio).await
-        } else {
-            self.transcribe_responses_audio(audio).await
-        }
+        self.transcribe_with_prompt(audio, _format, self.default_prompt.as_deref())
+            .await
     }
 
     fn name(&self) -> &'static str {
@@ -218,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_provider_creation() {
-        let provider = OpenAiSttProvider::new("test-key".to_string(), None);
+        let provider = OpenAiSttProvider::new("test-key".to_string(), None, None);
         assert_eq!(provider.name(), "openai");
         assert_eq!(provider.model, "gpt-4o-audio-preview");
     }
@@ -226,38 +298,44 @@ mod tests {
     #[test]
     fn test_provider_with_custom_model() {
         let provider =
-            OpenAiSttProvider::new("test-key".to_string(), Some("whisper-1".to_string()));
+            OpenAiSttProvider::new("test-key".to_string(), Some("whisper-1".to_string()), None);
         assert_eq!(provider.model, "whisper-1");
     }
 
     #[test]
     fn test_is_chat_audio_model() {
-        let provider = OpenAiSttProvider::new("test-key".to_string(), None);
+        let provider = OpenAiSttProvider::new("test-key".to_string(), None, None);
         assert!(!provider.uses_transcriptions_endpoint());
 
         let provider = OpenAiSttProvider::new(
             "test-key".to_string(),
             Some("gpt-4o-mini-audio-preview".to_string()),
+            None,
         );
         assert!(!provider.uses_transcriptions_endpoint());
 
-        let provider =
-            OpenAiSttProvider::new("test-key".to_string(), Some("gpt-audio".to_string()));
+        let provider = OpenAiSttProvider::new(
+            "test-key".to_string(),
+            Some("gpt-audio".to_string()),
+            None,
+        );
         assert!(!provider.uses_transcriptions_endpoint());
 
         let provider = OpenAiSttProvider::new(
             "test-key".to_string(),
             Some("gpt-audio-mini".to_string()),
+            None,
         );
         assert!(!provider.uses_transcriptions_endpoint());
 
         let provider =
-            OpenAiSttProvider::new("test-key".to_string(), Some("whisper-1".to_string()));
+            OpenAiSttProvider::new("test-key".to_string(), Some("whisper-1".to_string()), None);
         assert!(provider.uses_transcriptions_endpoint());
 
         let provider = OpenAiSttProvider::new(
             "test-key".to_string(),
             Some("gpt-4o-transcribe".to_string()),
+            None,
         );
         assert!(provider.uses_transcriptions_endpoint());
     }

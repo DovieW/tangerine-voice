@@ -10,15 +10,19 @@ pub struct GroqSttProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    default_prompt: Option<String>,
 }
 
 impl GroqSttProvider {
+    const PROMPT_MAX_CHARS: usize = 224;
+
     /// Create a new Groq STT provider
     ///
     /// # Arguments
     /// * `api_key` - Groq API key
     /// * `model` - Model to use (e.g., "whisper-large-v3")
-    pub fn new(api_key: String, model: Option<String>) -> Self {
+    /// * `default_prompt` - Optional transcription prompt (OpenAI-compatible `prompt` field)
+    pub fn new(api_key: String, model: Option<String>, default_prompt: Option<String>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -28,17 +32,34 @@ impl GroqSttProvider {
             client,
             api_key,
             model: model.unwrap_or_else(|| "whisper-large-v3".to_string()),
+            default_prompt,
         }
     }
 
     /// Create a new provider with a custom HTTP client
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn with_client(client: reqwest::Client, api_key: String, model: Option<String>) -> Self {
+    pub fn with_client(
+        client: reqwest::Client,
+        api_key: String,
+        model: Option<String>,
+        default_prompt: Option<String>,
+    ) -> Self {
         Self {
             client,
             api_key,
             model: model.unwrap_or_else(|| "whisper-large-v3".to_string()),
+            default_prompt,
         }
+    }
+
+    fn clamp_prompt(prompt: &str) -> Option<String> {
+        let trimmed = prompt.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let clamped: String = trimmed.chars().take(Self::PROMPT_MAX_CHARS).collect();
+        Some(clamped)
     }
 }
 
@@ -50,9 +71,17 @@ impl SttProvider for GroqSttProvider {
             .mime_str("audio/wav")
             .map_err(|e| SttError::Audio(format!("Failed to create multipart: {}", e)))?;
 
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .part("file", part)
             .text("model", self.model.clone());
+
+        if let Some(prompt) = self
+            .default_prompt
+            .as_deref()
+            .and_then(Self::clamp_prompt)
+        {
+            form = form.text("prompt", prompt);
+        }
 
         let response = self
             .client
@@ -95,14 +124,25 @@ mod tests {
 
     #[test]
     fn test_provider_creation() {
-        let provider = GroqSttProvider::new("test-key".to_string(), None);
+        let provider = GroqSttProvider::new("test-key".to_string(), None, None);
         assert_eq!(provider.name(), "groq");
         assert_eq!(provider.model, "whisper-large-v3");
     }
 
     #[test]
     fn test_provider_with_custom_model() {
-        let provider = GroqSttProvider::new("test-key".to_string(), Some("whisper-large-v3-turbo".to_string()));
+        let provider = GroqSttProvider::new(
+            "test-key".to_string(),
+            Some("whisper-large-v3-turbo".to_string()),
+            None,
+        );
         assert_eq!(provider.model, "whisper-large-v3-turbo");
+    }
+
+    #[test]
+    fn test_prompt_clamping() {
+        let long = "x".repeat(GroqSttProvider::PROMPT_MAX_CHARS + 10);
+        let clamped = GroqSttProvider::clamp_prompt(&long).unwrap();
+        assert_eq!(clamped.len(), GroqSttProvider::PROMPT_MAX_CHARS);
     }
 }

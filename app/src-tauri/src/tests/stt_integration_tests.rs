@@ -11,13 +11,13 @@ use crate::stt::{
 
 #[test]
 fn test_groq_provider_implements_trait() {
-    let provider = GroqSttProvider::new("test_key".to_string(), None);
+    let provider = GroqSttProvider::new("test_key".to_string(), None, None);
     assert_eq!(provider.name(), "groq");
 }
 
 #[test]
 fn test_openai_provider_implements_trait() {
-    let provider = OpenAiSttProvider::new("test_key".to_string(), None);
+    let provider = OpenAiSttProvider::new("test_key".to_string(), None, None);
     assert_eq!(provider.name(), "openai");
 }
 
@@ -32,13 +32,15 @@ fn test_groq_provider_with_custom_model() {
     let provider = GroqSttProvider::new(
         "test_key".to_string(),
         Some("distil-whisper-large-v3-en".to_string()),
+        None,
     );
     assert_eq!(provider.name(), "groq");
 }
 
 #[test]
 fn test_openai_provider_with_custom_model() {
-    let provider = OpenAiSttProvider::new("test_key".to_string(), Some("whisper-1".to_string()));
+    let provider =
+        OpenAiSttProvider::new("test_key".to_string(), Some("whisper-1".to_string()), None);
     assert_eq!(provider.name(), "openai");
 }
 
@@ -60,8 +62,7 @@ async fn test_groq_transcription_integration() {
             return;
         }
     };
-
-    let provider = GroqSttProvider::new(api_key, None);
+    let provider = GroqSttProvider::new(api_key, None, None);
     let wav_data = create_test_wav_silence(1.0); // 1 second of silence
     let format = AudioFormat {
         sample_rate: 16000,
@@ -88,7 +89,7 @@ async fn test_openai_transcription_integration() {
         }
     };
 
-    let provider = OpenAiSttProvider::new(api_key, None);
+    let provider = OpenAiSttProvider::new(api_key, None, None);
     let wav_data = create_test_wav_silence(1.0);
     let format = AudioFormat {
         sample_rate: 16000,
