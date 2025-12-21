@@ -509,7 +509,7 @@ export function UiSettings({
                 backgroundColor: "var(--bg-elevated)",
                 borderColor: "var(--border-default)",
                 color: "var(--text-primary)",
-                minWidth: 220,
+                minWidth: 180,
               },
             }}
           />
