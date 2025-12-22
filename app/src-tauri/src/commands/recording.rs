@@ -650,7 +650,7 @@ pub async fn pipeline_dictate(
 
 /// Test transcription using the last captured audio (WAV bytes).
 ///
-/// This is primarily used by the settings UI to validate STT provider/model/timeout.
+/// This is primarily used by the settings UI to validate STT provider/model.
 #[tauri::command]
 pub async fn pipeline_test_transcribe_last_audio(
     pipeline: State<'_, SharedPipeline>,

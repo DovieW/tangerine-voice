@@ -16,7 +16,7 @@ pub struct OllamaLlmProvider {
     client: Client,
     base_url: String,
     model: String,
-    timeout: Duration,
+    timeout: Option<Duration>,
 }
 
 impl OllamaLlmProvider {
@@ -26,7 +26,7 @@ impl OllamaLlmProvider {
             client: Client::new(),
             base_url: DEFAULT_OLLAMA_URL.to_string(),
             model: DEFAULT_MODEL.to_string(),
-            timeout: DEFAULT_OLLAMA_TIMEOUT,
+            timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
         }
     }
 
@@ -37,7 +37,7 @@ impl OllamaLlmProvider {
             client: Client::new(),
             base_url: DEFAULT_OLLAMA_URL.to_string(),
             model,
-            timeout: DEFAULT_OLLAMA_TIMEOUT,
+            timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
         }
     }
 
@@ -47,7 +47,7 @@ impl OllamaLlmProvider {
             client: Client::new(),
             base_url,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            timeout: DEFAULT_OLLAMA_TIMEOUT,
+            timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
         }
     }
 
@@ -58,13 +58,21 @@ impl OllamaLlmProvider {
             client,
             base_url: base_url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string()),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            timeout: DEFAULT_OLLAMA_TIMEOUT,
+            timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
         }
     }
 
     /// Set the request timeout
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Disable request timeouts entirely.
+    ///
+    /// This is primarily intended for the Settings UI "Test" actions.
+    pub fn without_timeout(mut self) -> Self {
+        self.timeout = None;
         self
     }
 
@@ -183,25 +191,28 @@ impl LlmProvider for OllamaLlmProvider {
             }),
         };
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout(self.timeout)
-                } else if e.is_connect() {
-                    LlmError::ProviderNotAvailable(format!(
-                        "Ollama not reachable at {}: {}",
-                        self.base_url, e
-                    ))
+        let mut req = self.client.post(&url).json(&request);
+        if let Some(timeout) = self.timeout {
+            req = req.timeout(timeout);
+        }
+
+        let response = req.send().await.map_err(|e| {
+            if e.is_timeout() {
+                if let Some(timeout) = self.timeout {
+                    LlmError::Timeout(timeout)
                 } else {
+                    // If we didn't configure a timeout, treat this as a generic network error.
                     LlmError::Network(e)
                 }
-            })?;
+            } else if e.is_connect() {
+                LlmError::ProviderNotAvailable(format!(
+                    "Ollama not reachable at {}: {}",
+                    self.base_url, e
+                ))
+            } else {
+                LlmError::Network(e)
+            }
+        })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -255,6 +266,12 @@ mod tests {
     fn test_custom_model() {
         let provider = OllamaLlmProvider::with_model("mistral".to_string());
         assert_eq!(provider.model(), "mistral");
+    }
+
+    #[test]
+    fn test_without_timeout_disables_timeout() {
+        let provider = OllamaLlmProvider::new().without_timeout();
+        assert!(provider.timeout.is_none());
     }
 
     #[test]

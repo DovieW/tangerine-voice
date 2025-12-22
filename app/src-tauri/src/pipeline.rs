@@ -654,7 +654,7 @@ impl SharedPipeline {
         &self,
         profile_id: Option<&str>,
     ) -> Result<String, PipelineError> {
-        let (wav_bytes, stt_provider, timeout, retry_config, cancel_token) = {
+        let (wav_bytes, stt_provider, retry_config, cancel_token) = {
             let mut inner = self
                 .inner
                 .lock()
@@ -699,11 +699,6 @@ impl SharedPipeline {
                 .as_ref()
                 .and_then(|p| p.stt_model.clone())
                 .or_else(|| config.stt_model.clone());
-            let desired_timeout = profile
-                .as_ref()
-                .and_then(|p| p.stt_timeout_seconds)
-                .map(|s| seconds_to_duration_or(s, config.transcription_timeout))
-                .unwrap_or(config.transcription_timeout);
 
             let stt_provider = match inner.get_or_create_stt_provider(
                 &desired_stt_provider,
@@ -746,7 +741,6 @@ impl SharedPipeline {
             (
                 wav_bytes,
                 stt_provider,
-                desired_timeout,
                 config.retry_config.clone(),
                 cancel_token,
             )
@@ -768,16 +762,12 @@ impl SharedPipeline {
             .await
         };
 
-        // Cancellation + timeout protection (mirrors main pipeline flow)
+        // Cancellation protection (test endpoint intentionally does NOT enforce timeout)
         tokio::select! {
             biased;
 
             _ = cancel_token.cancelled() => {
                 Err(PipelineError::Cancelled)
-            }
-
-            _ = tokio::time::sleep(timeout) => {
-                Err(PipelineError::Timeout(timeout))
             }
 
             result = transcription_future => {

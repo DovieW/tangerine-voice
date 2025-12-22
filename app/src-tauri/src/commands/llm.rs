@@ -89,6 +89,46 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
     }
 }
 
+fn create_llm_provider_without_timeout(config: &LlmConfig) -> Arc<dyn LlmProvider> {
+    match config.provider.as_str() {
+        "anthropic" => {
+            let provider = if let Some(model) = &config.model {
+                AnthropicLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                AnthropicLlmProvider::new(config.api_key.clone())
+            };
+            Arc::new(provider.without_timeout())
+        }
+        "groq" => {
+            let provider = if let Some(model) = &config.model {
+                GroqLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                GroqLlmProvider::new(config.api_key.clone())
+            };
+            Arc::new(provider.without_timeout())
+        }
+        "ollama" => {
+            let provider = OllamaLlmProvider::with_url(
+                config
+                    .ollama_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                config.model.clone(),
+            );
+            Arc::new(provider.without_timeout())
+        }
+        _ => {
+            // Default to OpenAI
+            let provider = if let Some(model) = &config.model {
+                OpenAiLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                OpenAiLlmProvider::new(config.api_key.clone())
+            };
+            Arc::new(provider.without_timeout())
+        }
+    }
+}
+
 /// Prompt configuration payload from frontend
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct PromptConfigPayload {
@@ -263,7 +303,8 @@ pub async fn test_llm_rewrite(
         timeout: config.llm_config.timeout,
     };
 
-    let provider = create_llm_provider(&provider_cfg);
+    // This is a *test* endpoint: do not enforce request timeouts.
+    let provider = create_llm_provider_without_timeout(&provider_cfg);
     let output = format_text(provider.as_ref(), &transcript, &prompts)
         .await
         .map_err(|e| LlmCommandError::from(e.to_string()))?;

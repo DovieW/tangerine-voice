@@ -1011,7 +1011,7 @@ export function PromptSettings({
         <div>
           <p className="settings-label">STT Timeout</p>
           <p className="settings-description">
-            Increase if nothing is getting transcribed
+            Increase if nothing is getting transcribed (seconds)
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1047,14 +1047,44 @@ export function PromptSettings({
           <NumberInput
             value={localProfileSttTimeout}
             onChange={(value) => {
+              // Keep local state permissive so typing feels natural (e.g., allow clearing the field
+              // or temporarily typing an out-of-range intermediate value like "1" before "10").
               setLocalProfileSttTimeout(value);
 
-              if (typeof value !== "number" || Number.isNaN(value)) {
+              // Only persist when the value is a valid in-range number.
+              if (typeof value !== "number" || Number.isNaN(value)) return;
+              if (value < 5 || value > 120) return;
+
+              if (isDefaultScope) {
+                handleDefaultSTTTimeoutChange(value);
                 return;
               }
 
-              const clamped = Math.max(5, Math.min(120, value));
-              if (clamped !== value) {
+              setSttTimeoutInheriting(false);
+              saveProfileMetadata({ stt_timeout_seconds: value });
+            }}
+            onBlur={() => {
+              // On blur, clamp and normalize.
+              // If the user cleared the input, revert to the effective value without saving.
+              if (localProfileSttTimeout === "") {
+                const fallback = isDefaultScope
+                  ? settings?.stt_timeout_seconds ?? DEFAULT_STT_TIMEOUT
+                  : activeProfile.stt_timeout_seconds ??
+                    settings?.stt_timeout_seconds ??
+                    DEFAULT_STT_TIMEOUT;
+                setLocalProfileSttTimeout(fallback);
+                return;
+              }
+
+              if (
+                typeof localProfileSttTimeout !== "number" ||
+                Number.isNaN(localProfileSttTimeout)
+              ) {
+                return;
+              }
+
+              const clamped = Math.max(5, Math.min(120, localProfileSttTimeout));
+              if (clamped !== localProfileSttTimeout) {
                 setLocalProfileSttTimeout(clamped);
               }
 
@@ -1068,22 +1098,16 @@ export function PromptSettings({
             }}
             min={5}
             max={120}
-            step={5}
-            clampBehavior="strict"
+            step={1}
+            clampBehavior="blur"
             styles={{
               input: {
                 backgroundColor: "var(--bg-elevated)",
                 borderColor: "var(--border-default)",
                 color: "var(--text-primary)",
-                width: 120,
+                width: 140,
               },
             }}
-            rightSection={
-              <Text size="xs" c="dimmed">
-                s
-              </Text>
-            }
-            rightSectionPointerEvents="none"
           />
         </div>
       </div>

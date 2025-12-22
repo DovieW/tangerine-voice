@@ -15,7 +15,7 @@ pub struct OpenAiLlmProvider {
     client: Client,
     api_key: String,
     model: String,
-    timeout: Duration,
+    timeout: Option<Duration>,
 }
 
 impl OpenAiLlmProvider {
@@ -25,7 +25,7 @@ impl OpenAiLlmProvider {
             client: Client::new(),
             api_key,
             model: DEFAULT_MODEL.to_string(),
-            timeout: DEFAULT_LLM_TIMEOUT,
+            timeout: Some(DEFAULT_LLM_TIMEOUT),
         }
     }
 
@@ -35,7 +35,7 @@ impl OpenAiLlmProvider {
             client: Client::new(),
             api_key,
             model,
-            timeout: DEFAULT_LLM_TIMEOUT,
+            timeout: Some(DEFAULT_LLM_TIMEOUT),
         }
     }
 
@@ -46,13 +46,21 @@ impl OpenAiLlmProvider {
             client,
             api_key,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            timeout: DEFAULT_LLM_TIMEOUT,
+            timeout: Some(DEFAULT_LLM_TIMEOUT),
         }
     }
 
     /// Set the request timeout
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Disable request timeouts entirely.
+    ///
+    /// This is primarily intended for the Settings UI "Test" actions.
+    pub fn without_timeout(mut self) -> Self {
+        self.timeout = None;
         self
     }
 
@@ -228,21 +236,27 @@ impl LlmProvider for OpenAiLlmProvider {
             }),
         };
 
-        let response = self
+        let mut req = self
             .client
             .post(OPENAI_API_URL)
             .bearer_auth(&self.api_key)
-            .json(&request)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout(self.timeout)
+            .json(&request);
+        if let Some(timeout) = self.timeout {
+            req = req.timeout(timeout);
+        }
+
+        let response = req.send().await.map_err(|e| {
+            if e.is_timeout() {
+                if let Some(timeout) = self.timeout {
+                    LlmError::Timeout(timeout)
                 } else {
+                    // If we didn't configure a timeout, treat this as a generic network error.
                     LlmError::Network(e)
                 }
-            })?;
+            } else {
+                LlmError::Network(e)
+            }
+        })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -319,5 +333,11 @@ mod tests {
     fn test_custom_model() {
         let provider = OpenAiLlmProvider::with_model("test-key".to_string(), "gpt-4".to_string());
         assert_eq!(provider.model(), "gpt-4");
+    }
+
+    #[test]
+    fn test_without_timeout_disables_timeout() {
+        let provider = OpenAiLlmProvider::new("test-key".to_string()).without_timeout();
+        assert!(provider.timeout.is_none());
     }
 }
