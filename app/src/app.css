@@ -129,7 +129,11 @@ body {
 }
 
 .overlay-button:disabled {
-	opacity: 0.75;
+	/*
+	 * When the overlay is busy (transcribing/rewriting) we disable the button to
+	 * avoid accidental clicks, but we don't want the widget to visually dim.
+	 */
+	opacity: 1;
 	cursor: wait;
 }
 
