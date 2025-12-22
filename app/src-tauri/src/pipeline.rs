@@ -295,6 +295,12 @@ pub struct PipelineConfig {
     pub quiet_audio_rms_dbfs_threshold: f32,
     /// Peak threshold (in dBFS) below which the audio is considered quiet.
     pub quiet_audio_peak_dbfs_threshold: f32,
+
+    /// Experimental noise gate strength (0-100).
+    ///
+    /// This is applied to the captured audio at stop-time (offline) before WAV encoding.
+    /// 0 disables the noise gate.
+    pub noise_gate_strength: u8,
     /// LLM formatting configuration
     pub llm_config: LlmConfig,
     /// API keys for all configured LLM providers (provider id -> key)
@@ -322,6 +328,8 @@ impl Default for PipelineConfig {
             quiet_audio_min_duration_secs: DEFAULT_QUIET_AUDIO_MIN_DURATION_SECS,
             quiet_audio_rms_dbfs_threshold: DEFAULT_QUIET_AUDIO_RMS_DBFS_THRESHOLD,
             quiet_audio_peak_dbfs_threshold: DEFAULT_QUIET_AUDIO_PEAK_DBFS_THRESHOLD,
+
+            noise_gate_strength: 0,
 
             llm_config: LlmConfig::default(),
             llm_api_keys: HashMap::new(),
@@ -618,7 +626,11 @@ impl SharedPipeline {
             return Err(PipelineError::NotRecording);
         }
 
-        match inner.audio_capture.stop_and_get_wav() {
+        let noise_gate_strength = inner.config.noise_gate_strength;
+        match inner
+            .audio_capture
+            .stop_and_get_wav_with_noise_gate(noise_gate_strength)
+        {
             Ok(wav_bytes) => {
                 // Keep a copy for STT testing/debugging UI.
                 inner.last_wav_bytes = Some(wav_bytes.clone());
@@ -798,7 +810,11 @@ impl SharedPipeline {
                 return Err(PipelineError::NotRecording);
             }
 
-            let (wav_bytes, stats) = match inner.audio_capture.stop_and_get_wav_with_stats() {
+            let noise_gate_strength = inner.config.noise_gate_strength;
+            let (wav_bytes, stats) = match inner
+                .audio_capture
+                .stop_and_get_wav_with_stats_with_noise_gate(noise_gate_strength)
+            {
                 Ok(out) => out,
                 Err(e) => {
                     inner.set_error(&format!("Failed to stop recording: {}", e));

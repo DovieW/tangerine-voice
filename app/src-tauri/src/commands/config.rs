@@ -463,6 +463,15 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or(default_pipeline_config.quiet_audio_peak_dbfs_threshold);
 
+    // Read experimental noise gate settings from store
+    let noise_gate_strength_raw: u64 = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("noise_gate_strength"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(0);
+    let noise_gate_strength: u8 = noise_gate_strength_raw.min(100) as u8;
+
     let config = PipelineConfig {
         stt_provider: stt_provider.clone(),
         stt_api_key,
@@ -479,6 +488,8 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         quiet_audio_min_duration_secs,
         quiet_audio_rms_dbfs_threshold,
         quiet_audio_peak_dbfs_threshold,
+
+        noise_gate_strength,
 
         llm_config: crate::llm::LlmConfig {
             enabled: llm_enabled,

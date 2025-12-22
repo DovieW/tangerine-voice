@@ -23,8 +23,43 @@ impl RecordingStore {
         }
     }
 
+    fn is_safe_request_id(id: &str) -> bool {
+        // Request ids are expected to be UUID-like strings.
+        // We keep this conservative to prevent path traversal / weird filenames.
+        !id.trim().is_empty()
+            && id
+                .bytes()
+                .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_'))
+    }
+
     fn path_for_id(&self, id: &str) -> PathBuf {
         self.dir.join(format!("{}.wav", id))
+    }
+
+    /// Returns the absolute WAV path for a given request id if it exists on disk.
+    ///
+    /// This is intended for frontend playback via `convertFileSrc`.
+    pub fn wav_path_if_exists(&self, id: &str) -> Result<Option<PathBuf>, String> {
+        if !Self::is_safe_request_id(id) {
+            return Err("Invalid request id".to_string());
+        }
+
+        if let Ok(known) = self.known_existing.read() {
+            if known.contains(id) {
+                let p = self.path_for_id(id);
+                return Ok(if p.exists() { Some(p) } else { None });
+            }
+        }
+
+        let path = self.path_for_id(id);
+        if path.exists() {
+            if let Ok(mut known) = self.known_existing.write() {
+                known.insert(id.to_string());
+            }
+            Ok(Some(path))
+        } else {
+            Ok(None)
+        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

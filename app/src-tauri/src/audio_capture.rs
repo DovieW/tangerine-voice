@@ -14,6 +14,98 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread::{self, JoinHandle};
 
+fn clamp_u8_0_100(v: u8) -> u8 {
+    v.min(100)
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn db_to_amp(db: f32) -> f32 {
+    // db is dBFS; 0 dBFS == full-scale amplitude (1.0).
+    10.0_f32.powf(db / 20.0)
+}
+
+/// Apply a simple noise gate to interleaved samples.
+///
+/// - `samples` are interleaved f32 in [-1, 1]
+/// - `channels` is the interleaving width
+/// - `strength` is 0..=100 (0 => bypass)
+///
+/// This is intentionally lightweight and runs at stop-time (offline), not in the
+/// real-time capture callback.
+fn apply_noise_gate_interleaved(
+    samples: &[f32],
+    sample_rate: u32,
+    channels: u16,
+    strength: u8,
+) -> Vec<f32> {
+    let strength = clamp_u8_0_100(strength);
+    if strength == 0 || samples.is_empty() {
+        return samples.to_vec();
+    }
+
+    let channels_usize = channels.max(1) as usize;
+    let frames = samples.len() / channels_usize;
+
+    // Map 0..100 -> threshold dBFS range. Higher threshold => more aggressive gating.
+    // Tuned to be conservative at low strengths.
+    let t = strength as f32 / 100.0;
+    let threshold_dbfs = lerp(-75.0, -30.0, t);
+    let threshold_amp = db_to_amp(threshold_dbfs);
+
+    // Hysteresis reduces "chattering" around the threshold.
+    let close_threshold_amp = threshold_amp * 0.85;
+
+    // Attack/release smoothing on the *gain* to avoid clicks.
+    let fs = sample_rate.max(1) as f32;
+    let attack_s = 0.005_f32;
+    let release_s = 0.120_f32;
+
+    let attack_alpha = (-1.0 / (attack_s * fs)).exp();
+    let release_alpha = (-1.0 / (release_s * fs)).exp();
+
+    let mut out = Vec::with_capacity(samples.len());
+    let mut gate_open = false;
+    let mut gain: f32 = 0.0;
+
+    for frame_idx in 0..frames {
+        let base = frame_idx * channels_usize;
+
+        // Envelope: max abs across channels for this frame.
+        let mut env = 0.0_f32;
+        for c in 0..channels_usize {
+            env = env.max(samples[base + c].abs());
+        }
+
+        if gate_open {
+            if env < close_threshold_amp {
+                gate_open = false;
+            }
+        } else if env > threshold_amp {
+            gate_open = true;
+        }
+
+        let target = if gate_open { 1.0_f32 } else { 0.0_f32 };
+        let alpha = if target > gain { attack_alpha } else { release_alpha };
+        gain = target + alpha * (gain - target);
+
+        for c in 0..channels_usize {
+            out.push(samples[base + c] * gain);
+        }
+    }
+
+    // If there were trailing samples not forming a whole frame, just copy them.
+    // (Shouldn't happen in normal capture, but keep it safe.)
+    let consumed = frames * channels_usize;
+    if consumed < samples.len() {
+        out.extend_from_slice(&samples[consumed..]);
+    }
+
+    out
+}
+
 /// Errors that can occur during audio capture
 #[derive(Debug, thiserror::Error)]
 pub enum AudioCaptureError {
@@ -132,6 +224,23 @@ impl AudioBuffer {
 
     /// Convert the buffer contents to WAV bytes
     pub fn to_wav_bytes(&self) -> Result<Vec<u8>, AudioCaptureError> {
+        self.to_wav_bytes_with_noise_gate(0)
+    }
+
+    /// Convert the buffer contents to WAV bytes, optionally applying an experimental noise gate.
+    ///
+    /// `noise_gate_strength` is 0..=100 where 0 disables the noise gate.
+    pub fn to_wav_bytes_with_noise_gate(
+        &self,
+        noise_gate_strength: u8,
+    ) -> Result<Vec<u8>, AudioCaptureError> {
+        let processed = apply_noise_gate_interleaved(
+            &self.samples,
+            self.sample_rate,
+            self.channels,
+            noise_gate_strength,
+        );
+
         let spec = WavSpec {
             channels: self.channels,
             sample_rate: self.sample_rate,
@@ -144,7 +253,7 @@ impl AudioBuffer {
             let mut writer = WavWriter::new(&mut cursor, spec)
                 .map_err(|e| AudioCaptureError::Encoding(e.to_string()))?;
 
-            for &sample in &self.samples {
+            for &sample in &processed {
                 // Convert f32 [-1.0, 1.0] to i16
                 let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                 writer
@@ -343,7 +452,17 @@ impl AudioCapture {
     /// Stop recording and return the captured audio as WAV bytes
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn stop_and_get_wav(&mut self) -> Result<Vec<u8>, AudioCaptureError> {
-        let (wav_bytes, _stats) = self.stop_and_get_wav_with_stats()?;
+        self.stop_and_get_wav_with_noise_gate(0)
+    }
+
+    /// Stop recording and return the captured audio as WAV bytes, applying an optional noise gate.
+    ///
+    /// `noise_gate_strength` is 0..=100 where 0 disables the noise gate.
+    pub fn stop_and_get_wav_with_noise_gate(
+        &mut self,
+        noise_gate_strength: u8,
+    ) -> Result<Vec<u8>, AudioCaptureError> {
+        let (wav_bytes, _stats) = self.stop_and_get_wav_with_stats_with_noise_gate(noise_gate_strength)?;
         Ok(wav_bytes)
     }
 
@@ -351,14 +470,25 @@ impl AudioCapture {
     pub fn stop_and_get_wav_with_stats(
         &mut self,
     ) -> Result<(Vec<u8>, AudioLevelStats), AudioCaptureError> {
+        self.stop_and_get_wav_with_stats_with_noise_gate(0)
+    }
+
+    /// Stop recording and return WAV bytes + level stats, optionally applying an experimental noise gate.
+    ///
+    /// Note: stats are computed on the *raw* (pre-gate) samples.
+    pub fn stop_and_get_wav_with_stats_with_noise_gate(
+        &mut self,
+        noise_gate_strength: u8,
+    ) -> Result<(Vec<u8>, AudioLevelStats), AudioCaptureError> {
         self.stop();
 
-        let buffer = self.buffer.lock().map_err(|_| {
-            AudioCaptureError::Encoding("Failed to lock buffer".to_string())
-        })?;
+        let buffer = self
+            .buffer
+            .lock()
+            .map_err(|_| AudioCaptureError::Encoding("Failed to lock buffer".to_string()))?;
 
         let stats = buffer.level_stats();
-        let wav_bytes = buffer.to_wav_bytes()?;
+        let wav_bytes = buffer.to_wav_bytes_with_noise_gate(noise_gate_strength)?;
 
         log::info!(
             "Audio capture stopped, {} bytes captured (duration {:.2}s, rms {:.6}, peak {:.6})",

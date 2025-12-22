@@ -1150,6 +1150,9 @@ pub fn run() {
             commands::recording::pipeline_test_transcribe_last_audio,
             commands::recording::pipeline_has_last_audio,
             commands::recording::pipeline_retry_transcription,
+            // Recording file access (for playback)
+            commands::recording::recording_get_wav_path,
+            commands::recording::recording_get_wav_base64,
             // Config commands (replacing Python server)
             commands::config::get_default_sections,
             commands::config::get_available_providers,
@@ -1473,6 +1476,11 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         default_pipeline_config.quiet_audio_peak_dbfs_threshold,
     );
 
+    // Read experimental noise gate settings from store
+    let noise_gate_strength_raw: u64 =
+        get_setting_from_store(app, "noise_gate_strength", 0u64);
+    let noise_gate_strength: u8 = noise_gate_strength_raw.min(100) as u8;
+
     // Read LLM settings from store
     let rewrite_llm_enabled: bool = get_setting_from_store(app, "rewrite_llm_enabled", false);
     let llm_provider_setting: Option<String> = get_setting_from_store(app, "llm_provider", None);
@@ -1564,6 +1572,8 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         quiet_audio_min_duration_secs,
         quiet_audio_rms_dbfs_threshold,
         quiet_audio_peak_dbfs_threshold,
+
+        noise_gate_strength,
 
         llm_config: llm::LlmConfig {
             enabled: llm_enabled,

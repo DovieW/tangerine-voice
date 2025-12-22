@@ -13,6 +13,7 @@ import {
 	Title,
 	Tooltip,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircle,
@@ -23,12 +24,15 @@ import {
   Copy,
   Info,
   Loader,
+  Pause,
+  Play,
   Trash2,
   XCircle,
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useClearRequestLogs, useRequestLogs } from "../lib/queries";
+import { useRecordingPlayer } from "../lib/useRecordingPlayer";
 import type {
   LogEntry,
   LogLevel,
@@ -164,7 +168,13 @@ function LogEntryItem({ entry }: { entry: LogEntry }) {
   );
 }
 
-function RequestLogItem({ log }: { log: RequestLog }) {
+function RequestLogItem({
+  log,
+  player,
+}: {
+  log: RequestLog;
+  player: ReturnType<typeof useRecordingPlayer>;
+}) {
   // NOTE: `llm_provider`/`llm_model` can reflect configured defaults.
   // Use `llm_duration_ms` to indicate whether an LLM rewrite was actually attempted.
   const llmAttempted = log.llm_duration_ms !== null;
@@ -204,6 +214,36 @@ function RequestLogItem({ log }: { log: RequestLog }) {
             </Text>
           </Group>
           <Group gap="xs" wrap="nowrap">
+            <Tooltip
+              label={
+                log.status === "in_progress"
+                  ? "Recording is still in progress"
+                  : player.isPlaying(log.id)
+                  ? "Pause recording"
+                  : "Play recording"
+              }
+            >
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="sm"
+                loading={player.isLoading(log.id)}
+                disabled={log.status === "in_progress"}
+                onClick={(e) => {
+                  // Prevent accordion toggle when clicking play/pause.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  player.toggle(log.id);
+                }}
+                aria-label={player.isPlaying(log.id) ? "Pause" : "Play"}
+              >
+                {player.isPlaying(log.id) ? (
+                  <Pause size={14} />
+                ) : (
+                  <Play size={14} />
+                )}
+              </ActionIcon>
+            </Tooltip>
             {totalDurationMs !== null && (
               <Badge
                 variant="light"
@@ -407,6 +447,15 @@ export function LogsView() {
   const { data: logs } = useRequestLogs(100);
   const clearLogsMutation = useClearRequestLogs();
   const [systemEvents, setSystemEvents] = useState<SystemEvent[]>([]);
+  const player = useRecordingPlayer({
+    onError: (message) => {
+      notifications.show({
+        title: "Playback",
+        message,
+        color: "red",
+      });
+    },
+  });
 
   // Listen for system events from Rust
   useEffect(() => {
@@ -539,7 +588,7 @@ export function LogsView() {
       {logs && logs.length > 0 ? (
         <Accordion variant="contained" radius="md" chevronPosition="left">
           {logs.map((log) => (
-            <RequestLogItem key={log.id} log={log} />
+            <RequestLogItem key={log.id} log={log} player={player} />
           ))}
         </Accordion>
       ) : (

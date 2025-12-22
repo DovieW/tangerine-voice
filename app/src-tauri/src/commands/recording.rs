@@ -49,6 +49,50 @@ impl From<String> for CommandError {
     }
 }
 
+/// Get the absolute path to a saved WAV recording for a given request id.
+///
+/// Returns `null` when the recording doesn't exist.
+#[tauri::command]
+pub fn recording_get_wav_path(
+    app: AppHandle,
+    request_id: String,
+) -> Result<Option<String>, CommandError> {
+    let store = app
+        .try_state::<RecordingStore>()
+        .ok_or_else(|| CommandError::from("Recording store not available".to_string()))?;
+
+    let path = store.wav_path_if_exists(&request_id).map_err(CommandError::from)?;
+    Ok(path.map(|p| p.to_string_lossy().to_string()))
+}
+
+/// Get saved WAV bytes for a given request id as base64.
+///
+/// Some webviews can fail to play `convertFileSrc` URLs for WAVs if the asset protocol
+/// serves an unexpected content-type; base64+Blob playback is a reliable fallback.
+///
+/// Returns `null` when the recording doesn't exist.
+#[tauri::command]
+pub fn recording_get_wav_base64(
+    app: AppHandle,
+    request_id: String,
+) -> Result<Option<String>, CommandError> {
+    use base64::Engine;
+
+    let store = app
+        .try_state::<RecordingStore>()
+        .ok_or_else(|| CommandError::from("Recording store not available".to_string()))?;
+
+    // Reuse the same validation / existence semantics.
+    let path = store.wav_path_if_exists(&request_id).map_err(CommandError::from)?;
+    let Some(_) = path else {
+        return Ok(None);
+    };
+
+    let wav = store.load_wav(&request_id).map_err(CommandError::from)?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(wav);
+    Ok(Some(encoded))
+}
+
 /// Start recording audio using the pipeline
 #[tauri::command]
 pub fn pipeline_start_recording(

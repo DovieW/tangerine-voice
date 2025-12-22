@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Store } from "@tauri-apps/plugin-store";
@@ -8,26 +8,26 @@ import { z } from "zod";
  * Connection state for UI display (maps from pipeline state)
  */
 export type ConnectionState =
-	| "disconnected"
-	| "connecting"
-	| "idle"
-	| "recording"
-	| "processing";
+  | "disconnected"
+  | "connecting"
+  | "idle"
+  | "recording"
+  | "processing";
 
 interface TypeTextResult {
-	success: boolean;
-	error?: string;
+  success: boolean;
+  error?: string;
 }
 
 export interface HotkeyConfig {
-	modifiers: string[];
-	key: string;
+  modifiers: string[];
+  key: string;
 }
 
 // Zod schema for HotkeyConfig validation
 export const HotkeyConfigSchema = z.object({
-	modifiers: z.array(z.string()),
-	key: z.string().min(1, "Key is required"),
+  modifiers: z.array(z.string()),
+  key: z.string().min(1, "Key is required"),
 });
 
 interface HistoryEntry {
@@ -149,6 +149,9 @@ export interface AppSettings {
   quiet_audio_min_duration_secs: number;
   quiet_audio_rms_dbfs_threshold: number;
   quiet_audio_peak_dbfs_threshold: number;
+
+  // Experimental: noise gate (0 = off, 100 = strongest)
+  noise_gate_strength: number;
 }
 
 function normalizePlayingAudioHandling(value: unknown): PlayingAudioHandling {
@@ -170,6 +173,12 @@ function normalizePlayingAudioHandling(value: unknown): PlayingAudioHandling {
 
   // Default for fresh installs / missing setting
   return "mute";
+}
+
+function normalizeNoiseGateStrength(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  const rounded = Math.round(value);
+  return Math.min(100, Math.max(0, rounded));
 }
 
 // ============================================================================
@@ -500,6 +509,10 @@ export const tauriAPI = {
         (await store.get<number>("quiet_audio_rms_dbfs_threshold")) ?? -50,
       quiet_audio_peak_dbfs_threshold:
         (await store.get<number>("quiet_audio_peak_dbfs_threshold")) ?? -40,
+
+      noise_gate_strength: normalizeNoiseGateStrength(
+        await store.get("noise_gate_strength")
+      ),
     };
   },
 
@@ -668,6 +681,15 @@ export const tauriAPI = {
     await store.save();
   },
 
+  async updateNoiseGateStrength(strength: number): Promise<void> {
+    const store = await getStore();
+    await store.set(
+      "noise_gate_strength",
+      normalizeNoiseGateStrength(strength)
+    );
+    await store.save();
+  },
+
   async isAudioMuteSupported(): Promise<boolean> {
     return invoke("is_audio_mute_supported");
   },
@@ -825,33 +847,33 @@ export const sttAPI = {
 // ============================================================================
 
 export interface DefaultSectionsResponse {
-	main: string;
-	advanced: string;
-	dictionary: string;
+  main: string;
+  advanced: string;
+  dictionary: string;
 }
 
 interface ProviderInfo {
-	value: string;
-	label: string;
-	is_local: boolean;
+  value: string;
+  label: string;
+  is_local: boolean;
 }
 
 interface AvailableProvidersResponse {
-	stt: ProviderInfo[];
-	llm: ProviderInfo[];
+  stt: ProviderInfo[];
+  llm: ProviderInfo[];
 }
 
 export const configAPI = {
-	// Default prompt sections (from Tauri)
-	getDefaultSections: () =>
-		invoke<DefaultSectionsResponse>("get_default_sections"),
+  // Default prompt sections (from Tauri)
+  getDefaultSections: () =>
+    invoke<DefaultSectionsResponse>("get_default_sections"),
 
-	// Available providers (from Tauri, based on configured API keys)
-	getAvailableProviders: () =>
-		invoke<AvailableProvidersResponse>("get_available_providers"),
+  // Available providers (from Tauri, based on configured API keys)
+  getAvailableProviders: () =>
+    invoke<AvailableProvidersResponse>("get_available_providers"),
 
-	// Sync pipeline config when settings change
-	syncPipelineConfig: () => invoke<void>("sync_pipeline_config"),
+  // Sync pipeline config when settings change
+  syncPipelineConfig: () => invoke<void>("sync_pipeline_config"),
 };
 
 // ============================================================================
@@ -862,32 +884,52 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export type RequestStatus = "in_progress" | "success" | "error" | "cancelled";
 
 export interface LogEntry {
-	timestamp: string;
-	level: LogLevel;
-	message: string;
-	details: string | null;
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  details: string | null;
 }
 
 export interface RequestLog {
-	id: string;
-	started_at: string;
-	ended_at: string | null;
-	stt_provider: string;
-	stt_model: string | null;
-	llm_provider: string | null;
-	llm_model: string | null;
-	raw_transcript: string | null;
-	final_text: string | null;
-	stt_duration_ms: number | null;
-	llm_duration_ms: number | null;
-	status: RequestStatus;
-	error_message: string | null;
-	entries: LogEntry[];
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  stt_provider: string;
+  stt_model: string | null;
+  llm_provider: string | null;
+  llm_model: string | null;
+  raw_transcript: string | null;
+  final_text: string | null;
+  stt_duration_ms: number | null;
+  llm_duration_ms: number | null;
+  status: RequestStatus;
+  error_message: string | null;
+  entries: LogEntry[];
 }
 
 export const logsAPI = {
-	getRequestLogs: (limit?: number) =>
-		invoke<RequestLog[]>("get_request_logs", { limit: limit ?? 100 }),
+  getRequestLogs: (limit?: number) =>
+    invoke<RequestLog[]>("get_request_logs", { limit: limit ?? 100 }),
 
-	clearRequestLogs: () => invoke<void>("clear_request_logs"),
+  clearRequestLogs: () => invoke<void>("clear_request_logs"),
+};
+
+// ============================================================================
+// Recordings API (playback)
+// ============================================================================
+
+export const recordingsAPI = {
+  // Returns a URL usable as an <audio src>, or null if no recording exists.
+  getRecordingAssetUrl: async (params: { requestId: string }) => {
+    const path = await invoke<string | null>("recording_get_wav_path", {
+      requestId: params.requestId,
+    });
+    return path ? convertFileSrc(path) : null;
+  },
+
+  // Returns base64 WAV bytes, or null if no recording exists.
+  getRecordingWavBase64: (params: { requestId: string }) =>
+    invoke<string | null>("recording_get_wav_base64", {
+      requestId: params.requestId,
+    }),
 };

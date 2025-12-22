@@ -289,6 +289,19 @@ export function useUpdateQuietAudioPeakDbfsThreshold() {
   });
 }
 
+export function useUpdateNoiseGateStrength() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (strength: number) => {
+      await tauriAPI.updateNoiseGateStrength(strength);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
 export function useIsAudioMuteSupported() {
   return useQuery({
     queryKey: ["audioMuteSupported"],

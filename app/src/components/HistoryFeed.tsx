@@ -31,6 +31,8 @@ import {
   Copy,
   Filter,
   MessageSquare,
+  Pause,
+  Play,
   RotateCcw,
   Search,
   Trash2,
@@ -44,6 +46,7 @@ import {
   useRetryTranscription,
 } from "../lib/queries";
 import { tauriAPI } from "../lib/tauri";
+import { useRecordingPlayer } from "../lib/useRecordingPlayer";
 import { listAllLlmModelKeys, listAllSttModelKeys } from "../lib/modelOptions";
 
 const HISTORY_PAGE_SIZE = 25;
@@ -107,6 +110,16 @@ export function HistoryFeed() {
   const clearHistory = useClearHistory();
   const retryMutation = useRetryTranscription();
   const clipboard = useClipboard();
+
+  const player = useRecordingPlayer({
+    onError: (message) => {
+      notifications.show({
+        title: "Playback",
+        message,
+        color: "red",
+      });
+    },
+  });
   const [confirmOpened, { open: openConfirm, close: closeConfirm }] =
     useDisclosure(false);
   const [filtersOpened, filtersHandlers] = useDisclosure(false);
@@ -186,7 +199,12 @@ export function HistoryFeed() {
       selectedSttModelKeys.length > 0 ||
       selectedLlmModelKeys.length > 0
     );
-  }, [showFailed, showEmptyTranscript, selectedSttModelKeys, selectedLlmModelKeys]);
+  }, [
+    showFailed,
+    showEmptyTranscript,
+    selectedSttModelKeys,
+    selectedLlmModelKeys,
+  ]);
 
   const resetFilters = () => {
     setShowFailed(true);
@@ -798,6 +816,30 @@ export function HistoryFeed() {
                     )}
                   </div>
                   <div className="history-actions">
+                    <ActionIcon
+                      variant="subtle"
+                      size="sm"
+                      color="gray"
+                      disabled={(entry.status ?? "success") === "in_progress"}
+                      loading={player.isLoading(entry.id)}
+                      onClick={() => player.toggle(entry.id)}
+                      title={
+                        player.isPlaying(entry.id)
+                          ? "Pause recording"
+                          : "Play recording"
+                      }
+                      aria-label={
+                        player.isPlaying(entry.id)
+                          ? "Pause recording"
+                          : "Play recording"
+                      }
+                    >
+                      {player.isPlaying(entry.id) ? (
+                        <Pause size={14} />
+                      ) : (
+                        <Play size={14} />
+                      )}
+                    </ActionIcon>
                     <ActionIcon
                       variant="subtle"
                       size="sm"

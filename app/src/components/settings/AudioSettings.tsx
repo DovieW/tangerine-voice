@@ -1,6 +1,8 @@
-import { Group, NumberInput, Switch, Tooltip } from "@mantine/core";
+import { Group, NumberInput, Slider, Switch, Tooltip } from "@mantine/core";
+import { useEffect, useState } from "react";
 import {
   useSettings,
+  useUpdateNoiseGateStrength,
   useUpdateQuietAudioGateEnabled,
   useUpdateQuietAudioMinDurationSecs,
   useUpdateQuietAudioPeakDbfsThreshold,
@@ -25,6 +27,7 @@ export function AudioSettings({
     useUpdateQuietAudioRmsDbfsThreshold();
   const updateQuietAudioPeakDbfsThreshold =
     useUpdateQuietAudioPeakDbfsThreshold();
+  const updateNoiseGateStrength = useUpdateNoiseGateStrength();
 
   const profiles = settings?.rewrite_program_prompt_profiles ?? [];
   const profile: RewriteProgramPromptProfile | null =
@@ -41,6 +44,19 @@ export function AudioSettings({
     settings?.quiet_audio_rms_dbfs_threshold ?? -50;
   const quietAudioPeakDbfsThreshold =
     settings?.quiet_audio_peak_dbfs_threshold ?? -40;
+
+  const noiseGateStrengthFromSettings = settings?.noise_gate_strength ?? 0;
+  const [noiseGateStrengthDraft, setNoiseGateStrengthDraft] = useState<
+    number | null
+  >(null);
+
+  useEffect(() => {
+    // If settings update elsewhere (or after save), drop any draft value.
+    setNoiseGateStrengthDraft(null);
+  }, [noiseGateStrengthFromSettings]);
+
+  const noiseGateStrength =
+    noiseGateStrengthDraft ?? noiseGateStrengthFromSettings;
 
   const content = (
     <>
@@ -155,6 +171,30 @@ export function AudioSettings({
             }}
           />
         </Group>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Noise gate (experimental)</p>
+          <p className="settings-description">
+            Reduce background noise in recordings. 0 = Off.
+          </p>
+        </div>
+        <div style={{ width: 220 }}>
+          <Slider
+            value={noiseGateStrength}
+            onChange={setNoiseGateStrengthDraft}
+            onChangeEnd={(value) => updateNoiseGateStrength.mutate(value)}
+            min={0}
+            max={100}
+            step={1}
+            label={(value) => (value === 0 ? "Off" : String(value))}
+            color="gray"
+            styles={{
+              track: { backgroundColor: "var(--bg-elevated)" },
+            }}
+          />
+        </div>
       </div>
     </>
   );
