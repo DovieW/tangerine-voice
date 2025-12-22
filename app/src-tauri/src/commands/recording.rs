@@ -7,7 +7,7 @@ use crate::audio_capture::VadAutoStopConfig;
 use crate::pipeline::{LlmOutcome, PipelineConfig, PipelineError, PipelineState, SharedPipeline};
 use crate::recordings::RecordingStore;
 use crate::request_log::RequestLogStore;
-use crate::history::HistoryStorage;
+use crate::history::{HistoryStorage, RequestModelInfo};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -109,10 +109,25 @@ pub async fn pipeline_stop_and_transcribe(
         .try_state::<RequestLogStore>()
         .and_then(|store| store.with_current(|log| log.id.clone()));
 
+    // Capture model info for persistence in history.
+    let model_info = {
+        let config = pipeline.config();
+        RequestModelInfo {
+            stt_provider: Some(config.stt_provider.clone()),
+            stt_model: config.stt_model.clone(),
+            llm_provider: if config.llm_config.enabled {
+                Some(config.llm_config.provider.clone())
+            } else {
+                None
+            },
+            llm_model: config.llm_config.model.clone(),
+        }
+    };
+
     // Create an in-progress history entry so the History view shows a running request.
     if let Some(req_id) = active_request_id.as_deref() {
         if let Some(history) = app.try_state::<HistoryStorage>() {
-            let _ = history.add_request_entry(req_id.to_string());
+            let _ = history.add_request_entry(req_id.to_string(), model_info);
             let _ = app.emit("history-changed", ());
         }
     }
@@ -300,15 +315,27 @@ pub async fn pipeline_retry_transcription(
         .map_err(CommandError::from)?;
 
     // Start a *new* request log for the retry attempt.
+    let config = pipeline.config();
     let new_request_id: Option<String> = app.try_state::<RequestLogStore>().map(|log_store| {
-        let config = pipeline.config();
         log_store.start_request(config.stt_provider.clone(), config.stt_model.clone())
     });
+
+    // Capture model info for persistence in history.
+    let model_info = RequestModelInfo {
+        stt_provider: Some(config.stt_provider.clone()),
+        stt_model: config.stt_model.clone(),
+        llm_provider: if config.llm_config.enabled {
+            Some(config.llm_config.provider.clone())
+        } else {
+            None
+        },
+        llm_model: config.llm_config.model.clone(),
+    };
 
     // Create a history entry for the retry attempt.
     if let Some(req_id) = new_request_id.as_deref() {
         if let Some(history) = app.try_state::<HistoryStorage>() {
-            let _ = history.add_request_entry(req_id.to_string());
+            let _ = history.add_request_entry(req_id.to_string(), model_info);
             let _ = app.emit("history-changed", ());
         }
     }

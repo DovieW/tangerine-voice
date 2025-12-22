@@ -36,6 +36,10 @@ interface HistoryEntry {
   text: string;
   status?: "in_progress" | "success" | "error";
   error_message?: string | null;
+  stt_provider?: string | null;
+  stt_model?: string | null;
+  llm_provider?: string | null;
+  llm_model?: string | null;
 }
 
 export interface PromptSection {

@@ -25,7 +25,7 @@ mod windows_apps;
 mod tests;
 
 use audio_mute::AudioMuteManager;
-use history::HistoryStorage;
+use history::{HistoryStorage, RequestModelInfo};
 use recordings::RecordingStore;
 use request_log::RequestLogStore;
 use settings::HotkeyConfig;
@@ -495,13 +495,28 @@ fn stop_recording(
             .try_state::<RequestLogStore>()
             .and_then(|store| store.with_current(|log| log.id.clone()));
 
+        // Capture model info from pipeline config for persistence in history.
+        let model_info = {
+            let config = pipeline.config();
+            RequestModelInfo {
+                stt_provider: Some(config.stt_provider.clone()),
+                stt_model: config.stt_model.clone(),
+                llm_provider: if config.llm_config.enabled {
+                    Some(config.llm_config.provider.clone())
+                } else {
+                    None
+                },
+                llm_model: config.llm_config.model.clone(),
+            }
+        };
+
         tauri::async_runtime::spawn(async move {
             let _ = app_clone.emit("pipeline-transcription-started", ());
 
             // Create an in-progress history entry while we transcribe.
             if let Some(ref req_id) = request_id {
                 if let Some(history) = app_clone.try_state::<HistoryStorage>() {
-                    let _ = history.add_request_entry(req_id.clone());
+                    let _ = history.add_request_entry(req_id.clone(), model_info);
                     let _ = app_clone.emit("history-changed", ());
                 }
             }

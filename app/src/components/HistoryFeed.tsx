@@ -1,22 +1,35 @@
 import {
   ActionIcon,
+  Badge,
+  Box,
   Button,
+  Checkbox,
+  Collapse,
+  Divider,
   Group,
+  Indicator,
   Loader,
   Modal,
+  Popover,
+  ScrollArea,
+  Stack,
+  Switch,
   Text,
   TextInput,
+  UnstyledButton,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { useClipboard, useDisclosure } from "@mantine/hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { format, isToday, isYesterday } from "date-fns";
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Copy,
+  Filter,
   MessageSquare,
   RotateCcw,
   Search,
@@ -31,6 +44,7 @@ import {
   useRetryTranscription,
 } from "../lib/queries";
 import { tauriAPI } from "../lib/tauri";
+import { listAllLlmModelKeys, listAllSttModelKeys } from "../lib/modelOptions";
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -53,6 +67,10 @@ interface GroupedHistory {
     timestamp: string;
     status?: "in_progress" | "success" | "error";
     error_message?: string | null;
+    stt_provider?: string | null;
+    stt_model?: string | null;
+    llm_provider?: string | null;
+    llm_model?: string | null;
   }>;
 }
 
@@ -63,6 +81,10 @@ function groupHistoryByDate(
     timestamp: string;
     status?: "in_progress" | "success" | "error";
     error_message?: string | null;
+    stt_provider?: string | null;
+    stt_model?: string | null;
+    llm_provider?: string | null;
+    llm_model?: string | null;
   }>
 ): GroupedHistory[] {
   const groups: Record<string, GroupedHistory> = {};
@@ -87,8 +109,20 @@ export function HistoryFeed() {
   const clipboard = useClipboard();
   const [confirmOpened, { open: openConfirm, close: closeConfirm }] =
     useDisclosure(false);
+  const [filtersOpened, filtersHandlers] = useDisclosure(false);
+  const [sttExpanded, setSttExpanded] = useState(false);
+  const [llmExpanded, setLlmExpanded] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [page, setPage] = useState(1);
+
+  const [showFailed, setShowFailed] = useState(true);
+  const [showEmptyTranscript, setShowEmptyTranscript] = useState(false);
+  const [selectedSttModelKeys, setSelectedSttModelKeys] = useState<string[]>(
+    []
+  );
+  const [selectedLlmModelKeys, setSelectedLlmModelKeys] = useState<string[]>(
+    []
+  );
 
   // Listen for history changes from other windows (e.g., overlay after transcription)
   useEffect(() => {
@@ -119,19 +153,113 @@ export function HistoryFeed() {
     });
   };
 
+  const sttModelUsageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!history) return counts;
+    for (const entry of history) {
+      if (!entry.stt_provider || !entry.stt_model) continue;
+      const key = `${entry.stt_provider}::${entry.stt_model}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [history]);
+
+  const llmModelUsageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!history) return counts;
+    for (const entry of history) {
+      if (!entry.llm_provider || !entry.llm_model) continue;
+      const key = `${entry.llm_provider}::${entry.llm_model}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [history]);
+
+  const availableSttModelOptions = useMemo(() => listAllSttModelKeys(), []);
+  const availableLlmModelOptions = useMemo(() => listAllLlmModelKeys(), []);
+
+  // Check if any filters are active (for showing indicator on filter button)
+  const hasActiveFilters = useMemo(() => {
+    return (
+      !showFailed ||
+      showEmptyTranscript ||
+      selectedSttModelKeys.length > 0 ||
+      selectedLlmModelKeys.length > 0
+    );
+  }, [showFailed, showEmptyTranscript, selectedSttModelKeys, selectedLlmModelKeys]);
+
+  const resetFilters = () => {
+    setShowFailed(true);
+    setShowEmptyTranscript(false);
+    setSelectedSttModelKeys([]);
+    setSelectedLlmModelKeys([]);
+  };
+
   const filteredHistory = useMemo(() => {
     if (!history) return [];
     const query = filterText.trim().toLowerCase();
-    if (!query) return history;
+
     return history.filter((entry) => {
-      const text = (entry.text ?? "").toLowerCase();
-      const status = (entry.status ?? "success").toLowerCase();
-      const err = (entry.error_message ?? "").toLowerCase();
-      return (
-        text.includes(query) || status.includes(query) || err.includes(query)
-      );
+      // 1) Text search (existing behavior)
+      if (query) {
+        const text = (entry.text ?? "").toLowerCase();
+        const status = (entry.status ?? "success").toLowerCase();
+        const err = (entry.error_message ?? "").toLowerCase();
+        const matchesText =
+          text.includes(query) || status.includes(query) || err.includes(query);
+        if (!matchesText) return false;
+      }
+
+      // 2) Show Failed
+      if (!showFailed && (entry.status ?? "success") === "error") {
+        return false;
+      }
+
+      // 3) Show Empty transcript
+      if (
+        !showEmptyTranscript &&
+        (entry.status ?? "success") === "success" &&
+        !entry.text?.trim()
+      ) {
+        return false;
+      }
+
+      // 4) STT model filter
+      if (
+        selectedSttModelKeys.length > 0 &&
+        availableSttModelOptions.length > 0
+      ) {
+        const provider = entry.stt_provider;
+        const model = entry.stt_model;
+        if (!provider || !model) return false;
+        const key = `${provider}::${model}`;
+        if (!selectedSttModelKeys.includes(key)) return false;
+      }
+
+      // 5) LLM model filter (rewrite step)
+      if (
+        selectedLlmModelKeys.length > 0 &&
+        availableLlmModelOptions.length > 0
+      ) {
+        const provider = entry.llm_provider;
+        const model = entry.llm_model;
+        if (!provider || !model) return false;
+        const key = `${provider}::${model}`;
+        if (!selectedLlmModelKeys.includes(key)) return false;
+      }
+
+      return true;
     });
-  }, [history, filterText]);
+  }, [
+    history,
+    filterText,
+    showFailed,
+    showEmptyTranscript,
+    availableSttModelOptions,
+    availableLlmModelOptions,
+    selectedSttModelKeys,
+    selectedLlmModelKeys,
+  ]);
 
   const totalPages = Math.max(
     1,
@@ -149,7 +277,13 @@ export function HistoryFeed() {
   // When the filter changes, reset to page 1 so results are predictable.
   useEffect(() => {
     setPage(1);
-  }, [filterText]);
+  }, [
+    filterText,
+    showFailed,
+    showEmptyTranscript,
+    selectedSttModelKeys,
+    selectedLlmModelKeys,
+  ]);
 
   const pageHistory = useMemo(() => {
     const start = (page - 1) * HISTORY_PAGE_SIZE;
@@ -256,6 +390,268 @@ export function HistoryFeed() {
           size="xs"
           style={{ width: 240 }}
         />
+
+        <Popover
+          opened={filtersOpened}
+          onChange={(opened) =>
+            opened ? filtersHandlers.open() : filtersHandlers.close()
+          }
+          position="bottom-start"
+          shadow="lg"
+          radius="md"
+        >
+          <Popover.Target>
+            <Indicator
+              size={8}
+              color="blue"
+              offset={2}
+              disabled={!hasActiveFilters}
+              processing={hasActiveFilters}
+            >
+              <ActionIcon
+                variant={hasActiveFilters ? "light" : "subtle"}
+                size="sm"
+                color={hasActiveFilters ? "blue" : "gray"}
+                onClick={filtersHandlers.toggle}
+                title="Filter options"
+                aria-label="Filter options"
+              >
+                <Filter size={16} />
+              </ActionIcon>
+            </Indicator>
+          </Popover.Target>
+          <Popover.Dropdown
+            p={0}
+            style={{
+              backgroundColor: "var(--bg-elevated)",
+              border: "1px solid var(--border-default)",
+              width: 280,
+              overflow: "hidden",
+            }}
+          >
+            {/* Header */}
+            <Group justify="space-between" p="xs" pb={8}>
+              <Text size="sm" fw={600}>
+                Filters
+              </Text>
+              {hasActiveFilters && (
+                <Button
+                  variant="subtle"
+                  size="compact-xs"
+                  color="gray"
+                  onClick={resetFilters}
+                  styles={{ root: { height: 20, padding: "0 6px" } }}
+                >
+                  Reset
+                </Button>
+              )}
+            </Group>
+
+            <Divider color="var(--border-default)" />
+
+            {/* Toggle filters */}
+            <Stack gap={0} p="xs">
+              <Group justify="space-between" py={4}>
+                <Text size="xs">Show failed</Text>
+                <Switch
+                  size="xs"
+                  checked={showFailed}
+                  onChange={(e) => setShowFailed(e.currentTarget.checked)}
+                />
+              </Group>
+              <Group justify="space-between" py={4}>
+                <Text size="xs">Show empty transcripts</Text>
+                <Switch
+                  size="xs"
+                  checked={showEmptyTranscript}
+                  onChange={(e) =>
+                    setShowEmptyTranscript(e.currentTarget.checked)
+                  }
+                />
+              </Group>
+            </Stack>
+
+            <Divider color="var(--border-default)" />
+
+            {/* STT Models Section */}
+            <Box>
+              <UnstyledButton
+                onClick={() => setSttExpanded((v) => !v)}
+                w="100%"
+                py={8}
+                px="xs"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <Group gap={8}>
+                  <Text size="xs" fw={500}>
+                    STT Models
+                  </Text>
+                  {selectedSttModelKeys.length > 0 && (
+                    <Badge size="xs" variant="filled" color="blue" circle>
+                      {selectedSttModelKeys.length}
+                    </Badge>
+                  )}
+                </Group>
+                <ChevronDown
+                  size={14}
+                  style={{
+                    transform: sttExpanded ? "rotate(180deg)" : "rotate(0)",
+                    transition: "transform 150ms ease",
+                    color: "var(--text-secondary)",
+                  }}
+                />
+              </UnstyledButton>
+              <Collapse in={sttExpanded}>
+                <Box px="xs" pb="xs">
+                  {availableSttModelOptions.length === 0 ? (
+                    <Text c="dimmed" size="xs">
+                      No STT models available.
+                    </Text>
+                  ) : (
+                    <ScrollArea.Autosize mah={140} type="auto" offsetScrollbars>
+                      <Checkbox.Group
+                        value={selectedSttModelKeys}
+                        onChange={setSelectedSttModelKeys}
+                      >
+                        <Stack gap={6}>
+                          {availableSttModelOptions.map((opt) => {
+                            const count = sttModelUsageCounts.get(opt.key) ?? 0;
+                            return (
+                              <Checkbox
+                                key={opt.key}
+                                value={opt.key}
+                                size="xs"
+                                label={
+                                  <Group gap={6} wrap="nowrap">
+                                    <Text size="xs" style={{ flex: 1 }}>
+                                      {opt.label}
+                                    </Text>
+                                    <Badge
+                                      size="xs"
+                                      variant="light"
+                                      color={count > 0 ? "gray" : "dark"}
+                                      styles={{
+                                        root: {
+                                          minWidth: 24,
+                                          height: 16,
+                                          padding: "0 4px",
+                                        },
+                                      }}
+                                    >
+                                      {count}
+                                    </Badge>
+                                  </Group>
+                                }
+                                styles={{
+                                  label: { width: "100%" },
+                                  body: { alignItems: "center" },
+                                }}
+                              />
+                            );
+                          })}
+                        </Stack>
+                      </Checkbox.Group>
+                    </ScrollArea.Autosize>
+                  )}
+                </Box>
+              </Collapse>
+            </Box>
+
+            <Divider color="var(--border-default)" />
+
+            {/* LLM Models Section */}
+            <Box>
+              <UnstyledButton
+                onClick={() => setLlmExpanded((v) => !v)}
+                w="100%"
+                py={8}
+                px="xs"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <Group gap={8}>
+                  <Text size="xs" fw={500}>
+                    LLM Models
+                  </Text>
+                  {selectedLlmModelKeys.length > 0 && (
+                    <Badge size="xs" variant="filled" color="blue" circle>
+                      {selectedLlmModelKeys.length}
+                    </Badge>
+                  )}
+                </Group>
+                <ChevronDown
+                  size={14}
+                  style={{
+                    transform: llmExpanded ? "rotate(180deg)" : "rotate(0)",
+                    transition: "transform 150ms ease",
+                    color: "var(--text-secondary)",
+                  }}
+                />
+              </UnstyledButton>
+              <Collapse in={llmExpanded}>
+                <Box px="xs" pb="xs">
+                  {availableLlmModelOptions.length === 0 ? (
+                    <Text c="dimmed" size="xs">
+                      No LLM models available.
+                    </Text>
+                  ) : (
+                    <ScrollArea.Autosize mah={140} type="auto" offsetScrollbars>
+                      <Checkbox.Group
+                        value={selectedLlmModelKeys}
+                        onChange={setSelectedLlmModelKeys}
+                      >
+                        <Stack gap={6}>
+                          {availableLlmModelOptions.map((opt) => {
+                            const count = llmModelUsageCounts.get(opt.key) ?? 0;
+                            return (
+                              <Checkbox
+                                key={opt.key}
+                                value={opt.key}
+                                size="xs"
+                                label={
+                                  <Group gap={6} wrap="nowrap">
+                                    <Text size="xs" style={{ flex: 1 }}>
+                                      {opt.label}
+                                    </Text>
+                                    <Badge
+                                      size="xs"
+                                      variant="light"
+                                      color={count > 0 ? "gray" : "dark"}
+                                      styles={{
+                                        root: {
+                                          minWidth: 24,
+                                          height: 16,
+                                          padding: "0 4px",
+                                        },
+                                      }}
+                                    >
+                                      {count}
+                                    </Badge>
+                                  </Group>
+                                }
+                                styles={{
+                                  label: { width: "100%" },
+                                  body: { alignItems: "center" },
+                                }}
+                              />
+                            );
+                          })}
+                        </Stack>
+                      </Checkbox.Group>
+                    </ScrollArea.Autosize>
+                  )}
+                </Box>
+              </Collapse>
+            </Box>
+          </Popover.Dropdown>
+        </Popover>
 
         <Text c="dimmed" size="xs" style={{ whiteSpace: "nowrap" }}>
           {filteredHistory.length} result

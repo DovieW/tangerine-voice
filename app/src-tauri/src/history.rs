@@ -31,6 +31,27 @@ pub struct HistoryEntry {
     pub status: HistoryStatus,
     #[serde(default)]
     pub error_message: Option<String>,
+    /// STT provider used for this transcription (e.g., "groq", "openai").
+    #[serde(default)]
+    pub stt_provider: Option<String>,
+    /// STT model used for this transcription.
+    #[serde(default)]
+    pub stt_model: Option<String>,
+    /// LLM provider used for rewriting (if enabled).
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    /// LLM model used for rewriting (if enabled).
+    #[serde(default)]
+    pub llm_model: Option<String>,
+}
+
+/// Metadata about which models were used for a transcription request.
+#[derive(Debug, Clone, Default)]
+pub struct RequestModelInfo {
+    pub stt_provider: Option<String>,
+    pub stt_model: Option<String>,
+    pub llm_provider: Option<String>,
+    pub llm_model: Option<String>,
 }
 
 impl HistoryEntry {
@@ -41,16 +62,24 @@ impl HistoryEntry {
             text,
             status: HistoryStatus::Success,
             error_message: None,
+            stt_provider: None,
+            stt_model: None,
+            llm_provider: None,
+            llm_model: None,
         }
     }
 
-    pub fn new_request_in_progress(id: String) -> Self {
+    pub fn new_request_in_progress(id: String, model_info: RequestModelInfo) -> Self {
         Self {
             id,
             timestamp: Utc::now(),
             text: String::new(),
             status: HistoryStatus::InProgress,
             error_message: None,
+            stt_provider: model_info.stt_provider,
+            stt_model: model_info.stt_model,
+            llm_provider: model_info.llm_provider,
+            llm_model: model_info.llm_model,
         }
     }
 }
@@ -133,8 +162,8 @@ impl HistoryStorage {
     ///
     /// This is used to show a placeholder in the History view while a transcription
     /// is running, and to keep a failed attempt visible with a retry button.
-    pub fn add_request_entry(&self, request_id: String) -> Result<HistoryEntry, String> {
-        let entry = HistoryEntry::new_request_in_progress(request_id);
+    pub fn add_request_entry(&self, request_id: String, model_info: RequestModelInfo) -> Result<HistoryEntry, String> {
+        let entry = HistoryEntry::new_request_in_progress(request_id, model_info);
         {
             let mut data = self
                 .data
@@ -144,9 +173,9 @@ impl HistoryStorage {
             // Add to the beginning (newest first)
             data.entries.insert(0, entry.clone());
 
-            // Limit to 500 entries
-            if data.entries.len() > 500 {
-                data.entries.truncate(500);
+            // Limit to 5000 entries
+            if data.entries.len() > 5000 {
+                data.entries.truncate(5000);
             }
         }
         self.save()?;
@@ -167,7 +196,7 @@ impl HistoryStorage {
                 entry.error_message = None;
             } else {
                 // If we somehow missed creating an in-progress entry, fall back to inserting.
-                data.entries.insert(0, HistoryEntry::new_request_in_progress(request_id.to_string()));
+                data.entries.insert(0, HistoryEntry::new_request_in_progress(request_id.to_string(), RequestModelInfo::default()));
                 if let Some(entry) = data.entries.iter_mut().find(|e| e.id == request_id) {
                     entry.text = text;
                     entry.status = HistoryStatus::Success;
@@ -191,7 +220,7 @@ impl HistoryStorage {
                 entry.error_message = Some(error_message);
                 // Keep text as-is (likely empty). We intentionally do not delete the entry.
             } else {
-                let mut entry = HistoryEntry::new_request_in_progress(request_id.to_string());
+                let mut entry = HistoryEntry::new_request_in_progress(request_id.to_string(), RequestModelInfo::default());
                 entry.status = HistoryStatus::Error;
                 entry.error_message = Some(error_message);
                 data.entries.insert(0, entry);
