@@ -31,6 +31,7 @@ const STT_MODELS: Record<string, { value: string; label: string }[]> = {
     { value: "whisper-1", label: "Whisper-1" },
   ],
   deepgram: [
+    { value: "nova-3", label: "Nova 3" },
     { value: "nova-2", label: "Nova 2" },
     { value: "nova", label: "Nova" },
     { value: "enhanced", label: "Enhanced" },
@@ -55,6 +56,9 @@ const LLM_MODELS: Record<string, { value: string; label: string }[]> = {
     // { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
   ],
   anthropic: [
+    { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+    { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+    { value: "claude-opus-4-5", label: "Claude Opus 4.5" },
     { value: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku" },
     { value: "claude-3-5-sonnet-latest", label: "Claude 3.5 Sonnet" },
     { value: "claude-3-opus-latest", label: "Claude 3 Opus" },

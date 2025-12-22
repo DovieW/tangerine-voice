@@ -3,6 +3,7 @@
 use super::{AudioFormat, SttError, SttProvider};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::Url;
 use std::time::Duration;
 
 /// Deepgram API provider for speech-to-text
@@ -13,6 +14,23 @@ pub struct DeepgramSttProvider {
 }
 
 impl DeepgramSttProvider {
+    /// Build the Deepgram /v1/listen URL with required query parameters.
+    ///
+    /// We always enable `smart_format=true` for all Deepgram calls to improve
+    /// readability (e.g., numerals/date formatting), and we keep `punctuate=true`
+    /// enabled for clean transcripts.
+    fn listen_url(&self) -> Result<Url, SttError> {
+        let mut url = Url::parse("https://api.deepgram.com/v1/listen")
+            .map_err(|e| SttError::Config(format!("Invalid Deepgram base URL: {}", e)))?;
+
+        url.query_pairs_mut()
+            .append_pair("model", &self.model)
+            .append_pair("smart_format", "true")
+            .append_pair("punctuate", "true");
+
+        Ok(url)
+    }
+
     /// Create a new Deepgram STT provider
     ///
     /// # Arguments
@@ -56,15 +74,11 @@ impl SttProvider for DeepgramSttProvider {
             HeaderValue::from_static("audio/wav"),
         );
 
-        // Build URL with query parameters
-        let url = format!(
-            "https://api.deepgram.com/v1/listen?model={}&smart_format=true&punctuate=true",
-            self.model
-        );
+        let url = self.listen_url()?;
 
         let response = self
             .client
-            .post(&url)
+            .post(url)
             .headers(headers)
             .body(audio.to_vec())
             .send()

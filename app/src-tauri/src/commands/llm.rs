@@ -171,6 +171,9 @@ pub fn get_llm_providers() -> Vec<LlmProviderInfo> {
             requires_api_key: true,
             default_model: "claude-3-haiku-20240307".to_string(),
             models: vec![
+                "claude-sonnet-4-5".to_string(),
+                "claude-haiku-4-5".to_string(),
+                "claude-opus-4-5".to_string(),
                 "claude-3-haiku-20240307".to_string(),
                 "claude-3-sonnet-20240229".to_string(),
                 "claude-3-opus-20240229".to_string(),
