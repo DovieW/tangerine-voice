@@ -5,8 +5,9 @@
 	Define the brand accents here too so the overlay logo + waveform can share them.
 */
 :root {
+	--accent-rgb: 249 115 22;
 	--accent-primary: #f97316;
-	--accent-glow: rgba(249, 115, 22, 0.18);
+	--accent-glow: rgba(var(--accent-rgb) / 0.18);
 	--accent-hover: #fb923c;
 }
 
@@ -263,7 +264,7 @@ body {
 
 /* Waveform gets a tiny Tangerine glow only on hover (no always-on frame). */
 .overlay-button:hover .overlay-wave {
-	filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.18));
+	filter: drop-shadow(0 0 10px rgba(var(--accent-rgb) / 0.18));
 }
 
 /* Hide tooltips/popups in overlay - use high specificity instead of !important */

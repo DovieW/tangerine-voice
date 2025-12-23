@@ -409,7 +409,7 @@ export function HistoryFeed() {
           }
           styles={{
             input: {
-              backgroundColor: "var(--bg-card)",
+              backgroundColor: "transparent",
               borderColor: "var(--border-default)",
               color: "var(--text-primary)",
             },

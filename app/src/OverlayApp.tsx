@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useDrag } from "@use-gesture/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Logo from "./assets/logo.svg?react";
+import { applyAccentColor } from "./lib/accentColor";
 import { useSettings, useTypeText } from "./lib/queries";
 import { type ConnectionState, tauriAPI } from "./lib/tauri";
 import "./app.css";
@@ -696,6 +697,10 @@ function RecordingControl() {
   // Load settings (overlay mode + selected mic)
   const { data: settings } = useSettings();
 
+  useEffect(() => {
+    applyAccentColor(settings?.accent_color);
+  }, [settings?.accent_color]);
+
   // TanStack Query hooks
   const typeTextMutation = useTypeText();
 
@@ -1083,7 +1088,31 @@ function RecordingControl() {
     let unlisten: (() => void) | undefined;
 
     const setup = async () => {
-      unlisten = await tauriAPI.onSettingsChanged(() => {
+      unlisten = await tauriAPI.onSettingsChanged(async (payload) => {
+        // Apply accent immediately (without waiting on any disk reload).
+        try {
+          const maybeObj = payload as unknown;
+          if (maybeObj && typeof maybeObj === "object") {
+            const accent = (maybeObj as Record<string, unknown>).accent_color;
+            if (accent === null || typeof accent === "string") {
+              applyAccentColor(accent);
+            }
+          }
+        } catch (error) {
+          console.error("[Overlay] Failed to apply accent payload:", error);
+        }
+
+        // In the overlay window, force a disk reload so *all* settings fields reflect
+        // the latest changes made by the main window.
+        try {
+          await tauriAPI.reloadSettingsFromDisk();
+        } catch (error) {
+          console.error(
+            "[Overlay] Failed to reload settings from disk:",
+            error
+          );
+        }
+
         queryClient.invalidateQueries({ queryKey: ["settings"] });
         // Sync pipeline config when settings change
         invoke("sync_pipeline_config").catch(console.error);
@@ -1155,7 +1184,9 @@ function RecordingControl() {
       : null;
 
   const renderIcon = () => {
-    if (isLoading) return <Loader size="xs" color="orange" />;
+    if (isLoading) {
+      return <Loader size="xs" style={{ color: "var(--accent-primary)" }} />;
+    }
     if (isError) {
       return (
         <div style={{ color: "#ef4444" }} aria-label="Error">

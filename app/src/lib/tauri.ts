@@ -3,6 +3,7 @@ import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Store } from "@tauri-apps/plugin-store";
 import { z } from "zod";
+import { normalizeHexColor } from "./accentColor";
 
 /**
  * Connection state for UI display (maps from pipeline state)
@@ -127,6 +128,8 @@ export interface AppSettings {
   paste_last_hotkey: HotkeyConfig;
   selected_mic_id: string | null;
   sound_enabled: boolean;
+  /** Optional user override; null/undefined means use default Tangerine accent */
+  accent_color: string | null;
   // Global gate for the optional LLM rewrite step
   rewrite_llm_enabled: boolean;
   cleanup_prompt_sections: CleanupPromptSections | null;
@@ -472,6 +475,9 @@ export const tauriAPI = {
       selected_mic_id:
         (await store.get<string | null>("selected_mic_id")) ?? null,
       sound_enabled: (await store.get<boolean>("sound_enabled")) ?? true,
+      accent_color: normalizeHexColor(
+        (await store.get<string | null>("accent_color")) ?? null
+      ),
       rewrite_llm_enabled:
         (await store.get<boolean>("rewrite_llm_enabled")) ?? false,
       cleanup_prompt_sections:
@@ -514,6 +520,33 @@ export const tauriAPI = {
         await store.get("noise_gate_strength")
       ),
     };
+  },
+
+  /**
+   * Force the settings store to reload from disk.
+   * Useful for secondary windows (overlay) when another window updates settings.json.
+   */
+  async reloadSettingsFromDisk(): Promise<void> {
+    const store = await getStore();
+    await store.load();
+  },
+
+  async updateAccentColor(color: string | null): Promise<void> {
+    const store = await getStore();
+    const normalized = normalizeHexColor(color);
+
+    if (!normalized) {
+      await store.delete("accent_color");
+    } else {
+      await store.set("accent_color", normalized);
+    }
+
+    await store.save();
+
+    // Notify other windows (overlay) to refresh cached settings.
+    // Include the new accent in the payload so the overlay can update immediately
+    // without waiting for a disk reload.
+    await emit("settings-changed", { accent_color: normalized ?? null });
   },
 
   async updateToggleHotkey(hotkey: HotkeyConfig): Promise<void> {
@@ -790,13 +823,17 @@ export const tauriAPI = {
   },
 
   // Settings sync between windows (main -> overlay)
-  async emitSettingsChanged(): Promise<void> {
-    return emit("settings-changed", {});
+  async emitSettingsChanged(
+    payload: Record<string, unknown> = {}
+  ): Promise<void> {
+    return emit("settings-changed", payload);
   },
 
-  async onSettingsChanged(callback: () => void): Promise<UnlistenFn> {
-    return listen("settings-changed", () => {
-      callback();
+  async onSettingsChanged(
+    callback: (payload: unknown) => void
+  ): Promise<UnlistenFn> {
+    return listen("settings-changed", (event) => {
+      callback(event.payload);
     });
   },
 };

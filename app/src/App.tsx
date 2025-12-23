@@ -28,6 +28,7 @@ import {
   DEFAULT_PASTE_LAST_HOTKEY,
   DEFAULT_TOGGLE_HOTKEY,
 } from "./lib/hotkeyDefaults";
+import { applyAccentColor } from "./lib/accentColor";
 import { useSettings } from "./lib/queries";
 import { type HotkeyConfig, tauriAPI } from "./lib/tauri";
 import "./styles.css";
@@ -174,7 +175,7 @@ function SettingsView() {
     queryFn: async () => {
       try {
         const results = await Promise.all(
-          API_KEY_STORE_KEYS.map((key) => tauriAPI.hasApiKey(key)),
+          API_KEY_STORE_KEYS.map((key) => tauriAPI.hasApiKey(key))
         );
         return results.some(Boolean);
       } catch {
@@ -375,6 +376,16 @@ function SettingsView() {
   );
 }
 
+function AccentColorSync() {
+  const { data: settings } = useSettings();
+
+  useEffect(() => {
+    applyAccentColor(settings?.accent_color);
+  }, [settings?.accent_color]);
+
+  return null;
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState<View>("home");
 
@@ -397,6 +408,7 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      <AccentColorSync />
       <Sidebar activeView={activeView} onViewChange={setActiveView} />
       {renderView()}
     </div>

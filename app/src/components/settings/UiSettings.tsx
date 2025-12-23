@@ -10,11 +10,12 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { Info, RefreshCcw, RotateCcw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   useIsAudioMuteSupported,
   useSettings,
+  useUpdateAccentColor,
   useUpdateOutputHitEnter,
   useUpdateOutputMode,
   useUpdateOverlayMode,
@@ -23,6 +24,7 @@ import {
   useUpdateSoundEnabled,
   useUpdateWidgetPosition,
 } from "../../lib/queries";
+import { DEFAULT_ACCENT_HEX, applyAccentColor } from "../../lib/accentColor";
 import type {
   OutputMode,
   OverlayMode,
@@ -105,6 +107,7 @@ export function UiSettings({
   const { data: settings, isLoading } = useSettings();
   const { data: isAudioMuteSupported } = useIsAudioMuteSupported();
   const updateSoundEnabled = useUpdateSoundEnabled();
+  const updateAccentColor = useUpdateAccentColor();
   const updatePlayingAudioHandling = useUpdatePlayingAudioHandling();
   const updateOverlayMode = useUpdateOverlayMode();
   const updateWidgetPosition = useUpdateWidgetPosition();
@@ -191,6 +194,51 @@ export function UiSettings({
     isProfileScope && isInheriting(profile?.output_hit_enter);
 
   const outputFlags = outputModeToFlags(outputMode);
+
+  // Accent color (global only)
+  const ACCENT_COLOR_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: "tangerine", label: "Tangerine" },
+    { value: "#ef4444", label: "Red" },
+    { value: "#ec4899", label: "Pink" },
+    { value: "#a855f7", label: "Purple" },
+    { value: "#3b82f6", label: "Blue" },
+    { value: "#06b6d4", label: "Cyan" },
+    { value: "#22c55e", label: "Green" },
+    { value: "#eab308", label: "Yellow" },
+    { value: "#9ca3af", label: "Grey" },
+  ];
+
+  const accentColorValue = settings?.accent_color ?? null;
+  const accentDropdownValueFromSettings = accentColorValue ?? "tangerine";
+  const [accentDropdownValue, setAccentDropdownValue] = useState<string>(
+    accentDropdownValueFromSettings
+  );
+
+  useEffect(() => {
+    setAccentDropdownValue(accentDropdownValueFromSettings);
+  }, [accentDropdownValueFromSettings]);
+
+  const getAccentSwatch = (value: string): string => {
+    return value === "tangerine" ? DEFAULT_ACCENT_HEX : value;
+  };
+
+  const handleAccentColorChange = (value: string | null) => {
+    if (!value) return;
+    if (isProfileScope) return;
+
+    // Update UI immediately (even before the settings query refetch completes)
+    setAccentDropdownValue(value);
+
+    if (value === "tangerine") {
+      // Use default Tangerine (remove override)
+      applyAccentColor(null);
+      updateAccentColor.mutate(null);
+      return;
+    }
+
+    applyAccentColor(value);
+    updateAccentColor.mutate(value);
+  };
 
   // Handlers - update profile or global depending on scope
   const handleSoundToggle = (checked: boolean) => {
@@ -595,6 +643,69 @@ export function UiSettings({
               size="sm"
             />
           </div>
+        </div>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Accent color</p>
+          <p className="settings-description">
+            Changes the app highlight color
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Tooltip
+            label="This setting can only be changed in the Default profile"
+            disabled={!isProfileScope}
+            withArrow
+          >
+            <Select
+              data={ACCENT_COLOR_OPTIONS}
+              value={accentDropdownValue}
+              onChange={handleAccentColorChange}
+              disabled={isLoading || isProfileScope}
+              withCheckIcon={false}
+              leftSection={
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    backgroundColor: getAccentSwatch(accentDropdownValue),
+                    boxShadow: "0 0 0 1px rgba(255, 255, 255, 0.18)",
+                    display: "inline-block",
+                  }}
+                />
+              }
+              leftSectionPointerEvents="none"
+              renderOption={({ option }) => (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      backgroundColor: getAccentSwatch(option.value),
+                      boxShadow: "0 0 0 1px rgba(255, 255, 255, 0.18)",
+                      display: "inline-block",
+                      flex: "0 0 auto",
+                    }}
+                  />
+                  <span>{option.label}</span>
+                </div>
+              )}
+              styles={{
+                input: {
+                  backgroundColor: "var(--bg-elevated)",
+                  borderColor: "var(--border-default)",
+                  color: "var(--text-primary)",
+                  minWidth: 180,
+                },
+              }}
+            />
+          </Tooltip>
         </div>
       </div>
     </>

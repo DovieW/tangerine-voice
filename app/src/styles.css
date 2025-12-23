@@ -15,11 +15,12 @@
 	--text-primary: #ffffff;
 	--text-secondary: #a0a0a0;
 	--text-muted: #666666;
-	/* Tangerine brand accent */
+	/* Tangerine brand accent (overridable at runtime via :root style vars) */
+	--accent-rgb: 249 115 22;
 	--accent-primary: #f97316;
-	--accent-glow: rgba(249, 115, 22, 0.18);
+	--accent-glow: rgba(var(--accent-rgb) / 0.18);
 	--accent-hover: #fb923c;
-	--accent-selection: rgba(249, 115, 22, 0.35);
+	--accent-selection: rgba(var(--accent-rgb) / 0.35);
 
 	/*
 		Toggle (Switch) colors
@@ -29,8 +30,8 @@
 	--toggle-track-off-bg: rgba(255, 255, 255, 0.14);
 	--toggle-track-off-border: rgba(255, 255, 255, 0.18);
 	/* Slight Tangerine tint when ON (readable, but on-brand) */
-	--toggle-track-on-bg: rgba(249, 115, 22, 0.38);
-	--toggle-track-on-border: rgba(249, 115, 22, 0.52);
+	--toggle-track-on-bg: rgba(var(--accent-rgb) / 0.38);
+	--toggle-track-on-border: rgba(var(--accent-rgb) / 0.52);
 }
 
 /*
@@ -94,14 +95,14 @@ body {
 
 /* Links: subtle Tangerine accent (avoid looking like a neon sign) */
 a {
-	color: rgba(249, 115, 22, 0.92);
-	text-decoration-color: rgba(249, 115, 22, 0.35);
+	color: rgba(var(--accent-rgb) / 0.92);
+	text-decoration-color: rgba(var(--accent-rgb) / 0.35);
 	text-underline-offset: 3px;
 }
 
 a:hover {
 	color: var(--accent-hover);
-	text-decoration-color: rgba(249, 115, 22, 0.55);
+	text-decoration-color: rgba(var(--accent-rgb) / 0.55);
 }
 
 a:focus-visible {
@@ -177,7 +178,7 @@ a:focus-visible {
 }
 
 .sidebar-nav-link:hover {
-	background-color: rgba(249, 115, 22, 0.08);
+	background-color: rgba(var(--accent-rgb) / 0.08);
 }
 
 .sidebar-nav-link:focus-visible {
@@ -196,13 +197,13 @@ a:focus-visible {
 }
 
 .sidebar-nav-link[data-active] {
-	background-color: rgba(249, 115, 22, 0.10);
+	background-color: rgba(var(--accent-rgb) / 0.10);
 	color: var(--accent-primary);
 	box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .sidebar-nav-link[data-active]:hover {
-	background-color: rgba(249, 115, 22, 0.14);
+	background-color: rgba(var(--accent-rgb) / 0.14);
 }
 
 .sidebar-footer {
@@ -420,9 +421,9 @@ a:focus-visible {
 
 .history-item:hover {
 	background: var(--bg-card-hover);
-	border-color: rgba(249, 115, 22, 0.16);
+	border-color: rgba(var(--accent-rgb) / 0.16);
 	/* Subtle, “premium” hover: inset sheen instead of a loud outer glow */
-	box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.14);
+	box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb) / 0.14);
 }
 
 .history-item:first-child {
@@ -473,7 +474,7 @@ a:focus-visible {
 	width: 48px;
 	height: 48px;
 	margin: 0 auto 16px;
-	color: rgba(249, 115, 22, 0.65);
+	color: rgba(var(--accent-rgb) / 0.65);
 	opacity: 0.35;
 }
 
@@ -550,12 +551,12 @@ a:focus-visible {
 
 /* Combobox/Select option hover: faint Tangerine tint */
 [data-mantine-color-scheme='dark'] .mantine-Combobox-option[data-hovered] {
-	background-color: rgba(249, 115, 22, 0.08);
+	background-color: rgba(var(--accent-rgb) / 0.08);
 }
 
 /* ActionIcon hover cue (kept subtle; only in main content area) */
 [data-mantine-color-scheme='dark'] .main-content :where(button.mantine-ActionIcon-root):hover:not(:disabled) {
-	box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.12);
+	box-shadow: 0 0 0 2px rgba(var(--accent-rgb) / 0.12);
 }
 
 /* Hotkey “keycaps” polish */
@@ -566,13 +567,13 @@ a:focus-visible {
 }
 
 .hotkey-display.capturing .mantine-Kbd-root {
-	border-color: rgba(249, 115, 22, 0.35);
-	box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.10);
+	border-color: rgba(var(--accent-rgb) / 0.35);
+	box-shadow: 0 0 0 2px rgba(var(--accent-rgb) / 0.10);
 }
 
 /* Logs: subtle in-progress stripe */
 [data-mantine-color-scheme='dark'] .mantine-Accordion-item[data-status='in_progress'] {
-	box-shadow: inset 3px 0 0 rgba(249, 115, 22, 0.75);
+	box-shadow: inset 3px 0 0 rgba(var(--accent-rgb) / 0.75);
 }
 
 
@@ -709,7 +710,7 @@ a:focus-visible {
 
 .device-selector .mantine-Select-input:focus {
 	border-color: var(--accent-primary);
-	box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.12);
+	box-shadow: 0 0 0 2px rgba(var(--accent-rgb) / 0.12);
 }
 
 .device-selector .mantine-Select-dropdown {
@@ -727,7 +728,7 @@ a:focus-visible {
 }
 
 .device-selector .mantine-Select-option[data-hovered] {
-	background-color: rgba(249, 115, 22, 0.08);
+	background-color: rgba(var(--accent-rgb) / 0.08);
 }
 
 /* Sliders: orange bar + thumb accents */
@@ -736,11 +737,11 @@ a:focus-visible {
 }
 
 [data-mantine-color-scheme='dark'] .mantine-Slider-thumb {
-	border-color: rgba(249, 115, 22, 0.65);
+	border-color: rgba(var(--accent-rgb) / 0.65);
 	background: var(--bg-elevated);
 	box-shadow:
 		0 0 0 2px rgba(0, 0, 0, 0.55),
-		0 0 0 4px rgba(249, 115, 22, 0.16);
+		0 0 0 4px rgba(var(--accent-rgb) / 0.16);
 }
 
 /* Checkboxes + Radios: orange when checked */

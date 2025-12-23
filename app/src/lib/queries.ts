@@ -170,6 +170,19 @@ export function useUpdateSoundEnabled() {
   });
 }
 
+export function useUpdateAccentColor() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (color: string | null) => tauriAPI.updateAccentColor(color),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+    onError: (error) => {
+      console.error("Update accent color failed:", error);
+    },
+  });
+}
+
 export function useUpdateRewriteLlmEnabled() {
   const queryClient = useQueryClient();
   return useMutation({
