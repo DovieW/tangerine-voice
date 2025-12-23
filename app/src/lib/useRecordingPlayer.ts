@@ -1,6 +1,83 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { recordingsAPI } from "./tauri";
 
+class PlaybackTimeoutError extends Error {
+  override name = "PlaybackTimeoutError";
+}
+
+class PlaybackError extends Error {
+  override name = "PlaybackError";
+}
+
+// Some WebView environments can take *ages* before failing when trying to play
+// asset-protocol WAV URLs. Keep this extremely short so we can fall back to
+// base64+Blob playback quickly.
+const ASSET_PLAYBACK_START_TIMEOUT_MS = 350;
+
+function resetAudioSource(audio: HTMLAudioElement) {
+  // Best-effort: stop any in-flight network/asset loading before switching URLs.
+  try {
+    audio.pause();
+  } catch {
+    // ignore
+  }
+  try {
+    audio.removeAttribute("src");
+    audio.load();
+  } catch {
+    // ignore
+  }
+}
+
+function watchPlaybackStart(
+  audio: HTMLAudioElement,
+  timeoutMs: number
+): { promise: Promise<void>; cleanup: () => void } {
+  let done = false;
+  let timer: number | null = null;
+
+  const onPlaying = () => {
+    cleanup();
+    resolve?.();
+  };
+
+  const onError = () => {
+    cleanup();
+    reject?.(new PlaybackError("Audio playback error"));
+  };
+
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    if (timer != null) window.clearTimeout(timer);
+    audio.removeEventListener("playing", onPlaying);
+    audio.removeEventListener("error", onError);
+  };
+
+  let resolve: (() => void) | null = null;
+  let reject: ((e: unknown) => void) | null = null;
+
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+
+    timer = window.setTimeout(() => {
+      cleanup();
+      rej(
+        new PlaybackTimeoutError(
+          `Playback did not start within ${timeoutMs}ms (asset URL)`
+        )
+      );
+    }, timeoutMs);
+
+    // `playing` is the strongest signal that playback actually started.
+    audio.addEventListener("playing", onPlaying);
+    audio.addEventListener("error", onError);
+  });
+
+  return { promise, cleanup };
+}
+
 export interface RecordingPlayerOptions {
   onError?: (message: string) => void;
 }
@@ -143,23 +220,54 @@ export function useRecordingPlayer(
           return;
         }
 
-        // Avoid re-setting src if the same URL is already loaded.
-        if (audio.src !== cached.url) {
-          audio.src = cached.url;
-        }
+        const tryPlay = async (url: string, kind: "asset" | "blob") => {
+          // Avoid re-setting src if the same URL is already loaded.
+          if (audio.src !== url) {
+            audio.src = url;
+          }
+
+          // For asset URLs, fail fast if playback doesn't start quickly.
+          if (kind === "asset") {
+            const watcher = watchPlaybackStart(
+              audio,
+              ASSET_PLAYBACK_START_TIMEOUT_MS
+            );
+            try {
+              // Only treat this as a success once we actually start playing.
+              // If `audio.play()` rejects, surface that immediately.
+              await Promise.race([
+                watcher.promise,
+                new Promise<void>((_, reject) => {
+                  audio.play().catch(reject);
+                }),
+              ]);
+            } finally {
+              watcher.cleanup();
+            }
+          } else {
+            await audio.play();
+          }
+        };
 
         try {
-          await audio.play();
+          await tryPlay(cached.url, cached.kind);
           setPlayingRequestId(id);
-          if (cached.kind === "asset") {
-            assetUrlPlayableRef.current = true;
-          }
+          if (cached.kind === "asset") assetUrlPlayableRef.current = true;
         } catch (e) {
-          // If the webview can't play the asset URL (common when MIME mapping is off),
-          // fall back to base64+Blob URL.
           const name = (e as { name?: string } | null)?.name;
-          if (name === "NotSupportedError" && cached.kind === "asset") {
+          const isAssetFailure =
+            cached.kind === "asset" &&
+            (name === "NotSupportedError" ||
+              name === "PlaybackTimeoutError" ||
+              name === "PlaybackError" ||
+              name === "AbortError" ||
+              name === "NetworkError");
+
+          // If the webview can't (or won't quickly) play the asset URL, fall back to base64+Blob.
+          if (isAssetFailure) {
             assetUrlPlayableRef.current = false;
+            resetAudioSource(audio);
+
             const base64 = await recordingsAPI.getRecordingWavBase64({
               requestId: id,
             });
