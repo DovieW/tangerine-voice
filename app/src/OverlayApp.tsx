@@ -5,7 +5,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useDrag } from "@use-gesture/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import Logo from "./assets/logo.svg?react";
 import { applyAccentColor } from "./lib/accentColor";
 import { useSettings, useTypeText } from "./lib/queries";
 import { type ConnectionState, tauriAPI } from "./lib/tauri";
@@ -156,6 +155,29 @@ function ErrorIcon() {
       <line x1="12" y1="8" x2="12" y2="12" />
       <line x1="12" y1="16" x2="12.01" y2="16" />
     </svg>
+  );
+}
+
+function RecordingDot({ state }: { state: PipelineState }) {
+  const dotState =
+    state === "recording" || state === "arming"
+      ? "recording"
+      : state === "transcribing" || state === "rewriting"
+      ? "processing"
+      : "idle";
+
+  return (
+    <div
+      className="overlay-dot"
+      data-state={dotState}
+      aria-label={
+        dotState === "recording"
+          ? "Recording"
+          : dotState === "processing"
+          ? "Transcribing"
+          : "Idle"
+      }
+    />
   );
 }
 
@@ -1443,7 +1465,7 @@ function RecordingControl() {
       } else {
         setRenderExpanded(false);
       }
-      tauriAPI.resizeOverlay(264, 56);
+      tauriAPI.resizeOverlay(224, 56);
       return;
     }
 
@@ -1457,7 +1479,7 @@ function RecordingControl() {
     // If we're active, we already rendered immediately above.
     if (pipelineState !== "idle") return;
 
-    if (rect.width >= 260) {
+    if (rect.width >= 220) {
       setRenderExpanded(true);
     }
   }, [expanded, pipelineState, rect.width]);
@@ -1911,10 +1933,7 @@ function RecordingControl() {
       ? "transcribing..."
       : null;
 
-  const renderIcon = () => {
-    if (isLoading) {
-      return <Loader size="xs" style={{ color: "var(--accent-primary)" }} />;
-    }
+  const renderLeftIndicator = () => {
     if (isError) {
       return (
         <div style={{ color: "#ef4444" }} aria-label="Error">
@@ -1922,7 +1941,8 @@ function RecordingControl() {
         </div>
       );
     }
-    return <Logo className="size-5" />;
+
+    return <RecordingDot state={pipelineState} />;
   };
 
   return (
@@ -1951,7 +1971,7 @@ function RecordingControl() {
               isError ? { background: "rgba(127, 29, 29, 0.92)" } : undefined
             }
           >
-            <div className="overlay-icon">{renderIcon()}</div>
+            <div className="overlay-icon">{renderLeftIndicator()}</div>
           </button>
         ) : null}
 
@@ -1966,7 +1986,7 @@ function RecordingControl() {
               isError ? { background: "rgba(127, 29, 29, 0.92)" } : undefined
             }
           >
-            <div className="overlay-icon">{renderIcon()}</div>
+            <div className="overlay-icon">{renderLeftIndicator()}</div>
             <div
               className={`overlay-center${
                 isError && lastError ? " overlay-center--error" : ""
@@ -2017,44 +2037,30 @@ function RecordingControl() {
                 </>
               )}
             </div>
-            <div className="overlay-meta">
-              <div
-                className="overlay-pill"
-                data-variant={
-                  isError
-                    ? "dim"
-                    : isRecording
-                    ? "rec"
-                    : isArming
-                    ? "arming"
-                    : "dim"
-                }
-                role={isError && !!lastFailedRequestId ? "button" : undefined}
-                tabIndex={isError && !!lastFailedRequestId ? 0 : undefined}
-                onClick={(e) => {
-                  if (!isError || !lastFailedRequestId) return;
-                  e.stopPropagation();
-                  onRetry();
-                }}
-                onKeyDown={(e) => {
-                  if (!isError || !lastFailedRequestId) return;
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onRetry();
-                  }
-                }}
-              >
-                {isError
-                  ? "Retry"
-                  : isRecording
-                  ? "REC"
-                  : isLoading
-                  ? "..."
-                  : "Tap"}
-              </div>
+            {isError ? (
+              <div className="overlay-meta">
+                {lastFailedRequestId ? (
+                  <div
+                    className="overlay-pill"
+                    data-variant="dim"
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRetry();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onRetry();
+                      }
+                    }}
+                  >
+                    Retry
+                  </div>
+                ) : null}
 
-              {isError ? (
                 <div
                   className="overlay-pill overlay-pill--close"
                   role="button"
@@ -2075,8 +2081,8 @@ function RecordingControl() {
                 >
                   ×
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </button>
         ) : null}
       </div>
