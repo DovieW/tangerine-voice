@@ -101,14 +101,14 @@ function ApiKeyInput({ config }: { config: ApiKeyConfig }) {
     trimmedSaved.length > 0 && trimmedValue.length > 0 && trimmedValue === trimmedSaved;
 
   return (
-    <div className="settings-row">
+    <div className="settings-row api-keys-row">
       <div>
         <p className="settings-label">{config.label}</p>
         <p className="settings-description">
           {hasKey ? "API key configured" : "Enter your API key"}
         </p>
       </div>
-      <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
+      <div className="settings-row-actions">
         <PasswordInput
           value={value}
           onChange={(e) => setValue(e.currentTarget.value)}
@@ -120,6 +120,7 @@ function ApiKeyInput({ config }: { config: ApiKeyConfig }) {
               backgroundColor: "var(--bg-elevated)",
               borderColor: "var(--border-default)",
               color: "var(--text-primary)",
+              height: 36,
               width: 200,
             },
           }}
@@ -127,7 +128,7 @@ function ApiKeyInput({ config }: { config: ApiKeyConfig }) {
             if (e.key === "Enter") handleSave();
           }}
         />
-        <Tooltip label={hasKey ? "Set API key" : "Set API key"}>
+        <Tooltip label="Set API key">
           <Button
             color="orange"
             size="sm"

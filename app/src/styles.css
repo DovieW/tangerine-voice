@@ -618,6 +618,20 @@ a:focus-visible {
 	border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Shared right-side control container for settings rows */
+.settings-row-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+/* API key rows: keep layout stable across “set/unset” states */
+.api-keys-row {
+	/* Ensure controls don’t affect row height via stretching */
+	align-items: center;
+}
+
 /*
  * Most settings tabs start with a .settings-row, which already has vertical
  * padding. Combined with the card padding this can look like “extra space” at
