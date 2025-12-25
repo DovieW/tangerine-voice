@@ -44,6 +44,7 @@ const STOP_SOUND: &[u8] = include_bytes!("assets/stop.mp3");
 ///
 /// Used to avoid cutting off cues when we do side-effects (like system mute) shortly after
 /// starting playback.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn estimated_duration(sound_type: SoundType, cue: AudioCue) -> Duration {
     match cue {
         // For the legacy MP3 cue, use the decoder's total duration when available.

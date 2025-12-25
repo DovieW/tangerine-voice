@@ -207,9 +207,7 @@ impl HistoryStorage {
     /// Returns the list of removed entry IDs (useful for cleaning up recordings).
     pub fn prune_older_than(&self, cutoff: DateTime<Utc>) -> Result<Vec<String>, String> {
         let mut removed: Vec<String> = Vec::new();
-        let mut changed = false;
-
-        {
+        let changed = {
             let mut data = self
                 .data
                 .write()
@@ -225,8 +223,8 @@ impl HistoryStorage {
                 }
             });
 
-            changed = data.entries.len() != before;
-        }
+            data.entries.len() != before
+        };
 
         if changed {
             self.save()?;

@@ -1402,7 +1402,6 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let mut last_seq: u64 = 0;
                     let mut last_emit = Instant::now();
-                    let mut primed_this_recording = false;
                     let mut last_priming_emit: Option<Instant> = None;
 
                     loop {
@@ -1421,7 +1420,6 @@ pub fn run() {
                         if let Some(state) = pipeline.try_state() {
                             if state != pipeline::PipelineState::Recording {
                                 last_seq = 0;
-                                primed_this_recording = false;
                                 last_priming_emit = None;
                                 continue;
                             }
@@ -1445,7 +1443,6 @@ pub fn run() {
                             };
                             if should_emit {
                                 last_priming_emit = Some(Instant::now());
-                                primed_this_recording = true;
                                 let payload = serde_json::json!({
                                     "seq": 0,
                                     "rms": 0.0,
@@ -1467,7 +1464,6 @@ pub fn run() {
                             continue;
                         }
                         last_seq = levels.seq;
-                        primed_this_recording = true;
 
                         // Waveform buckets (may be all-zeros early or on some devices).
                         let wave = pipeline.audio_waveform_snapshot_fast();

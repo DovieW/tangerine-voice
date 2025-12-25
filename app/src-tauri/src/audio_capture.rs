@@ -224,6 +224,7 @@ impl AudioBuffer {
     }
 
     /// Convert the buffer contents to WAV bytes
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn to_wav_bytes(&self) -> Result<Vec<u8>, AudioCaptureError> {
         self.to_wav_bytes_with_noise_gate(0)
     }
@@ -573,6 +574,7 @@ impl AudioCapture {
     ///
     /// # Arguments
     /// * `max_duration_secs` - Maximum recording duration in seconds (for buffer sizing)
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn start(&mut self, max_duration_secs: f32) -> Result<(), AudioCaptureError> {
         self.start_with_device_name(max_duration_secs, None)
     }
@@ -699,6 +701,7 @@ impl AudioCapture {
     }
 
     /// Stop recording and return the captured audio as WAV bytes along with level stats.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn stop_and_get_wav_with_stats(
         &mut self,
     ) -> Result<(Vec<u8>, AudioLevelStats), AudioCaptureError> {
