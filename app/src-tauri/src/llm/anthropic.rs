@@ -2,8 +2,10 @@
 
 use super::{LlmError, LlmProvider, DEFAULT_LLM_TIMEOUT};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::time::Duration;
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -17,6 +19,7 @@ pub struct AnthropicLlmProvider {
     model: String,
     timeout: Option<Duration>,
     thinking_budget_tokens: Option<i64>,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl AnthropicLlmProvider {
@@ -28,6 +31,7 @@ impl AnthropicLlmProvider {
             model: DEFAULT_MODEL.to_string(),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             thinking_budget_tokens: None,
+            request_log_store: None,
         }
     }
 
@@ -39,6 +43,7 @@ impl AnthropicLlmProvider {
             model,
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             thinking_budget_tokens: None,
+            request_log_store: None,
         }
     }
 
@@ -51,7 +56,13 @@ impl AnthropicLlmProvider {
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             thinking_budget_tokens: None,
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 
     /// Set the request timeout
@@ -201,6 +212,18 @@ impl LlmProvider for AnthropicLlmProvider {
             thinking: self.effective_thinking(),
         };
 
+        if let Some(store) = &self.request_log_store {
+            let request_json = serde_json::to_value(&request).unwrap_or_else(|_| {
+                json!({
+                    "provider": "anthropic",
+                    "error": "failed to serialize request",
+                })
+            });
+            store.with_current(|log| {
+                log.llm_request_json = Some(request_json);
+            });
+        }
+
         let mut req = self
             .client
             .post(ANTHROPIC_API_URL)
@@ -241,16 +264,30 @@ impl LlmProvider for AnthropicLlmProvider {
             )));
         }
 
-        let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
             LlmError::InvalidResponse(format!("Failed to parse response: {}", e))
         })?;
 
-        // Extract text from the first text content block
-        messages_response
-            .content
-            .iter()
-            .find(|block| block.content_type == "text")
-            .and_then(|block| block.text.clone())
+        if let Some(store) = &self.request_log_store {
+            let response_for_log = response_json.clone();
+            store.with_current(|log| {
+                log.llm_response_json = Some(response_for_log);
+            });
+        }
+
+        // Extract the first text content block.
+        response_json
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| {
+                arr.iter().find_map(|block| {
+                    let ty = block.get("type").and_then(|t| t.as_str());
+                    if ty != Some("text") {
+                        return None;
+                    }
+                    block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                })
+            })
             .ok_or_else(|| LlmError::InvalidResponse("No text content in response".to_string()))
     }
 

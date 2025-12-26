@@ -6,8 +6,10 @@
 
 use super::{LlmError, LlmProvider, DEFAULT_LLM_TIMEOUT};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::time::Duration;
 
 const GROQ_API_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
@@ -19,6 +21,7 @@ pub struct GroqLlmProvider {
     api_key: String,
     model: String,
     timeout: Option<Duration>,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl GroqLlmProvider {
@@ -29,6 +32,7 @@ impl GroqLlmProvider {
             api_key,
             model: DEFAULT_MODEL.to_string(),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            request_log_store: None,
         }
     }
 
@@ -39,7 +43,13 @@ impl GroqLlmProvider {
             api_key,
             model,
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 
     /// Set the request timeout.
@@ -119,6 +129,18 @@ impl LlmProvider for GroqLlmProvider {
             temperature: 0.3,
         };
 
+        if let Some(store) = &self.request_log_store {
+            let request_json = serde_json::to_value(&request).unwrap_or_else(|_| {
+                json!({
+                    "provider": "groq",
+                    "error": "failed to serialize request",
+                })
+            });
+            store.with_current(|log| {
+                log.llm_request_json = Some(request_json);
+            });
+        }
+
         let mut req = self
             .client
             .post(GROQ_API_URL)
@@ -156,15 +178,26 @@ impl LlmProvider for GroqLlmProvider {
             )));
         }
 
-        let chat_response: ChatResponse = response
+        let response_json: serde_json::Value = response
             .json()
             .await
             .map_err(|e| LlmError::InvalidResponse(format!("Failed to parse response: {}", e)))?;
 
-        chat_response
-            .choices
-            .first()
-            .map(|choice| choice.message.content.clone())
+        if let Some(store) = &self.request_log_store {
+            let response_for_log = response_json.clone();
+            store.with_current(|log| {
+                log.llm_response_json = Some(response_for_log);
+            });
+        }
+
+        response_json
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|msg| msg.get("content"))
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string())
             .ok_or_else(|| LlmError::InvalidResponse("No response choices returned".to_string()))
     }
 

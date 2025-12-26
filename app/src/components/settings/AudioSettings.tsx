@@ -149,11 +149,12 @@ export function AudioSettings({
     <>
       <DeviceSelector />
 
-      <div className="settings-row">
+      <div className="settings-row no-divider">
         <div>
           <p className="settings-label">Skip quiet recordings</p>
           <p className="settings-description">
             Skip transcription when the recording is basically quiet
+            (Sensitivity sets the RMS threshold in dBFS)
           </p>
           <p className="settings-description">{lastRecordingSummary}</p>
         </div>
@@ -184,7 +185,7 @@ export function AudioSettings({
             max={0}
             step={1}
             disabled={isProfileScope || !quietAudioGateEnabled}
-            placeholder="Sensitivity"
+            placeholder="Sensitivity (RMS dBFS)"
             styles={{
               input: {
                 backgroundColor: "var(--bg-elevated)",
@@ -197,7 +198,7 @@ export function AudioSettings({
         </div>
       </div>
 
-      <div style={{ marginTop: 0, marginBottom: 16 }}>
+      <div style={{ marginTop: 0, marginBottom: 0 }}>
         <Accordion variant="separated" radius="md">
           <Accordion.Item value="audio-test">
             <Accordion.Control>
@@ -300,7 +301,86 @@ export function AudioSettings({
 
       <div className="settings-row">
         <div>
-          <p className="settings-label">Noise gate threshold (experimental)</p>
+          <p className="settings-label">Skip quiet — Require speech</p>
+          <p className="settings-description">
+            Extra skip: don't transcribe if VAD finds no speech
+          </p>
+        </div>
+        <Switch
+          checked={quietAudioRequireSpeech}
+          onChange={(event) =>
+            updateQuietAudioRequireSpeech.mutate(event.currentTarget.checked)
+          }
+          disabled={isProfileScope || !quietAudioGateEnabled}
+          color="gray"
+          size="md"
+        />
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Skip quiet — Minimum duration</p>
+          <p className="settings-description">
+            Treat very short recordings as quiet (seconds)
+          </p>
+        </div>
+        <Group gap={8} align="center">
+          <NumberInput
+            value={quietAudioMinDurationSecs}
+            onChange={(value) => {
+              const next = typeof value === "number" ? value : 0;
+              updateQuietAudioMinDurationSecs.mutate(next);
+            }}
+            min={0}
+            max={5}
+            step={0.05}
+            decimalScale={2}
+            disabled={isProfileScope || !quietAudioGateEnabled}
+            styles={{
+              input: {
+                backgroundColor: "var(--bg-elevated)",
+                borderColor: "var(--border-default)",
+                color: "var(--text-primary)",
+                width: 140,
+              },
+            }}
+          />
+        </Group>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Skip quiet — Peak threshold</p>
+          <p className="settings-description">
+            Peak level below this is considered quiet (dBFS)
+          </p>
+        </div>
+        <Group gap={8} align="center">
+          <NumberInput
+            value={quietAudioPeakDbfsThreshold}
+            onChange={(value) => {
+              const next = typeof value === "number" ? value : -40;
+              updateQuietAudioPeakDbfsThreshold.mutate(next);
+            }}
+            min={-120}
+            max={0}
+            step={1}
+            disabled={isProfileScope || !quietAudioGateEnabled}
+            styles={{
+              input: {
+                backgroundColor: "var(--bg-elevated)",
+                borderColor: "var(--border-default)",
+                color: "var(--text-primary)",
+                width: 140,
+              },
+            }}
+          />
+        </Group>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Noise gate threshold</p>
           <p className="settings-description">
             Set how quiet audio must be to be suppressed. Blank = Off.
           </p>
@@ -419,85 +499,6 @@ export function AudioSettings({
           color="gray"
           size="md"
         />
-      </div>
-
-      <div className="settings-row">
-        <div>
-          <p className="settings-label">Require speech</p>
-          <p className="settings-description">
-            Extra skip: don't transcribe if VAD finds no speech
-          </p>
-        </div>
-        <Switch
-          checked={quietAudioRequireSpeech}
-          onChange={(event) =>
-            updateQuietAudioRequireSpeech.mutate(event.currentTarget.checked)
-          }
-          disabled={isProfileScope || !quietAudioGateEnabled}
-          color="gray"
-          size="md"
-        />
-      </div>
-
-      <div className="settings-row">
-        <div>
-          <p className="settings-label">Quiet minimum duration</p>
-          <p className="settings-description">
-            Treat very short recordings as quiet (seconds)
-          </p>
-        </div>
-        <Group gap={8} align="center">
-          <NumberInput
-            value={quietAudioMinDurationSecs}
-            onChange={(value) => {
-              const next = typeof value === "number" ? value : 0;
-              updateQuietAudioMinDurationSecs.mutate(next);
-            }}
-            min={0}
-            max={5}
-            step={0.05}
-            decimalScale={2}
-            disabled={isProfileScope || !quietAudioGateEnabled}
-            styles={{
-              input: {
-                backgroundColor: "var(--bg-elevated)",
-                borderColor: "var(--border-default)",
-                color: "var(--text-primary)",
-                width: 140,
-              },
-            }}
-          />
-        </Group>
-      </div>
-
-      <div className="settings-row">
-        <div>
-          <p className="settings-label">Quiet peak threshold</p>
-          <p className="settings-description">
-            Peak level below this is considered quiet (dBFS)
-          </p>
-        </div>
-        <Group gap={8} align="center">
-          <NumberInput
-            value={quietAudioPeakDbfsThreshold}
-            onChange={(value) => {
-              const next = typeof value === "number" ? value : -40;
-              updateQuietAudioPeakDbfsThreshold.mutate(next);
-            }}
-            min={-120}
-            max={0}
-            step={1}
-            disabled={isProfileScope || !quietAudioGateEnabled}
-            styles={{
-              input: {
-                backgroundColor: "var(--bg-elevated)",
-                borderColor: "var(--border-default)",
-                color: "var(--text-primary)",
-                width: 140,
-              },
-            }}
-          />
-        </Group>
       </div>
     </>
   );

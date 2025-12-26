@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -96,6 +97,23 @@ pub struct RequestLog {
     /// Formatted transcript from LLM (if used)
     #[serde(rename = "final_text")]
     pub formatted_transcript: Option<String>,
+
+    /// Exact-ish payload sent to STT provider (with binary audio redacted).
+    ///
+    /// NOTE: For providers that use multipart/raw binary bodies, we store a JSON
+    /// description of the request with placeholders for binary content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_request_json: Option<JsonValue>,
+    /// JSON response received from STT provider (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_response_json: Option<JsonValue>,
+
+    /// Payload sent to LLM provider (if LLM rewrite attempted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_request_json: Option<JsonValue>,
+    /// JSON response received from LLM provider (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_response_json: Option<JsonValue>,
     /// Final result (success or error)
     pub status: RequestStatus,
     /// Error message if status is Error
@@ -140,6 +158,10 @@ impl RequestLog {
             sample_rate: None,
             raw_transcript: None,
             formatted_transcript: None,
+            stt_request_json: None,
+            stt_response_json: None,
+            llm_request_json: None,
+            llm_response_json: None,
             status: RequestStatus::InProgress,
             error_message: None,
             entries: Vec::new(),

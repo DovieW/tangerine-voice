@@ -6,6 +6,8 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
+use crate::request_log::RequestLogStore;
+
 #[cfg(desktop)]
 use tauri_plugin_store::StoreExt;
 
@@ -608,6 +610,9 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
             ..Default::default()
         },
         llm_api_keys,
+
+        // Preserve provider payload logging across config sync.
+        request_log_store: app.try_state::<RequestLogStore>().map(|s| s.inner().clone()),
     };
 
     // Update the pipeline

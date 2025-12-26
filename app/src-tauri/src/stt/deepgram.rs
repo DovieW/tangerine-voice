@@ -2,8 +2,10 @@
 
 use super::{AudioFormat, SttError, SttProvider};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
+use serde_json::json;
 use std::time::Duration;
 
 /// Deepgram API provider for speech-to-text
@@ -11,6 +13,7 @@ pub struct DeepgramSttProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl DeepgramSttProvider {
@@ -46,6 +49,7 @@ impl DeepgramSttProvider {
             client,
             api_key,
             model: model.unwrap_or_else(|| "nova-2".to_string()),
+            request_log_store: None,
         }
     }
 
@@ -56,13 +60,39 @@ impl DeepgramSttProvider {
             client,
             api_key,
             model: model.unwrap_or_else(|| "nova-2".to_string()),
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 }
 
 #[async_trait]
 impl SttProvider for DeepgramSttProvider {
     async fn transcribe(&self, audio: &[u8], _format: &AudioFormat) -> Result<String, SttError> {
+        if let Some(store) = &self.request_log_store {
+            let url = self.listen_url()?;
+            let request_json = json!({
+                "provider": "deepgram",
+                "endpoint": url.as_str(),
+                "headers": {
+                    "content-type": "audio/wav",
+                    // Authorization intentionally omitted.
+                },
+                "body": {
+                    "bytes": audio.len(),
+                    "data": "<binary audio omitted>",
+                }
+            });
+
+            store.with_current(|log| {
+                log.stt_request_json = Some(request_json);
+            });
+        }
+
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -98,6 +128,13 @@ impl SttProvider for DeepgramSttProvider {
         }
 
         let result: serde_json::Value = response.json().await?;
+
+        if let Some(store) = &self.request_log_store {
+            let result_for_log = result.clone();
+            store.with_current(|log| {
+                log.stt_response_json = Some(result_for_log);
+            });
+        }
 
         // Deepgram response structure:
         // { "results": { "channels": [{ "alternatives": [{ "transcript": "..." }] }] } }

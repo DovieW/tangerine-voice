@@ -2,6 +2,7 @@
 
 use super::{LlmError, LlmProvider, DEFAULT_LLM_TIMEOUT};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,6 +19,7 @@ pub struct GeminiLlmProvider {
     timeout: Option<Duration>,
     thinking_budget: Option<i64>,
     thinking_level: Option<String>,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl GeminiLlmProvider {
@@ -29,6 +31,7 @@ impl GeminiLlmProvider {
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             thinking_budget: None,
             thinking_level: None,
+            request_log_store: None,
         }
     }
 
@@ -40,7 +43,13 @@ impl GeminiLlmProvider {
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             thinking_budget: None,
             thinking_level: None,
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -343,6 +352,18 @@ impl LlmProvider for GeminiLlmProvider {
             generation_config: Some(generation_config),
         };
 
+        if let Some(store) = &self.request_log_store {
+            let request_json = serde_json::to_value(&request).unwrap_or_else(|_| {
+                json!({
+                    "provider": "gemini",
+                    "error": "failed to serialize request",
+                })
+            });
+            store.with_current(|log| {
+                log.llm_request_json = Some(request_json);
+            });
+        }
+
         let mut req = self
             .client
             .post(url)
@@ -380,9 +401,19 @@ impl LlmProvider for GeminiLlmProvider {
             )));
         }
 
-        let response_json: GenerateContentResponse = response.json().await.map_err(|e| {
+        let response_value: serde_json::Value = response.json().await.map_err(|e| {
             LlmError::InvalidResponse(format!("Failed to parse Gemini response: {}", e))
         })?;
+
+        if let Some(store) = &self.request_log_store {
+            let response_for_log = response_value.clone();
+            store.with_current(|log| {
+                log.llm_response_json = Some(response_for_log);
+            });
+        }
+
+        let response_json: GenerateContentResponse = serde_json::from_value(response_value)
+            .map_err(|e| LlmError::InvalidResponse(format!("Failed to parse Gemini response: {}", e)))?;
 
         let output_text = Self::extract_text(&response_json)?;
 

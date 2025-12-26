@@ -24,6 +24,7 @@
 	"dependencies": {
 		"@fontsource/outfit": "^5.2.8",
 		"@fontsource/sora": "^5.2.8",
+		"@mantine/code-highlight": "^8.3.10",
 		"@mantine/core": "^8.3.10",
 		"@mantine/hooks": "^8.3.10",
 		"@mantine/notifications": "^8.3.10",
@@ -33,6 +34,7 @@
 		"@tauri-apps/plugin-store": "^2.4.1",
 		"@use-gesture/react": "^10.3.1",
 		"date-fns": "^4.1.0",
+		"highlight.js": "^11.11.1",
 		"lucide-react": "^0.561.0",
 		"react": "^19.2.3",
 		"react-dom": "^19.2.3",

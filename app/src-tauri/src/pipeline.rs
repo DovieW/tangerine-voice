@@ -20,6 +20,7 @@ use crate::llm::{
     format_text, AnthropicLlmProvider, GeminiLlmProvider, GroqLlmProvider, LlmConfig, LlmError,
     LlmProvider, OllamaLlmProvider, OpenAiLlmProvider,
 };
+use crate::request_log::RequestLogStore;
 use crate::stt::{AudioFormat, RetryConfig, SttError, SttProvider, SttRegistry, with_retry};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -329,6 +330,9 @@ pub struct PipelineConfig {
     pub llm_config: LlmConfig,
     /// API keys for all configured LLM providers (provider id -> key)
     pub llm_api_keys: HashMap<String, String>,
+
+    /// Optional request log store for capturing provider request/response payloads.
+    pub request_log_store: Option<RequestLogStore>,
     /// Path to local Whisper model (for local-whisper feature)
     #[cfg(feature = "local-whisper")]
     pub whisper_model_path: Option<std::path::PathBuf>,
@@ -366,6 +370,7 @@ impl Default for PipelineConfig {
 
             llm_config: LlmConfig::default(),
             llm_api_keys: HashMap::new(),
+            request_log_store: None,
             #[cfg(feature = "local-whisper")]
             whisper_model_path: None,
         }
@@ -451,17 +456,26 @@ impl PipelineInner {
         }
 
         let provider: Arc<dyn SttProvider> = match provider_id.as_str() {
-            "openai" => Arc::new(crate::stt::OpenAiSttProvider::new(
-                api_key,
-                model,
-                self.config.stt_transcription_prompt.clone(),
-            )),
-            "groq" => Arc::new(crate::stt::GroqSttProvider::new(
-                api_key,
-                model,
-                self.config.stt_transcription_prompt.clone(),
-            )),
-            "deepgram" => Arc::new(crate::stt::DeepgramSttProvider::new(api_key, model)),
+            "openai" => Arc::new(
+                crate::stt::OpenAiSttProvider::new(
+                    api_key,
+                    model,
+                    self.config.stt_transcription_prompt.clone(),
+                )
+                .with_request_log_store(self.config.request_log_store.clone()),
+            ),
+            "groq" => Arc::new(
+                crate::stt::GroqSttProvider::new(
+                    api_key,
+                    model,
+                    self.config.stt_transcription_prompt.clone(),
+                )
+                .with_request_log_store(self.config.request_log_store.clone()),
+            ),
+            "deepgram" => Arc::new(
+                crate::stt::DeepgramSttProvider::new(api_key, model)
+                    .with_request_log_store(self.config.request_log_store.clone()),
+            ),
             other => {
                 return Err(PipelineError::Config(format!(
                     "Unknown STT provider: {}",
@@ -524,7 +538,7 @@ impl PipelineInner {
         cfg.ollama_url = ollama_url;
         cfg.timeout = timeout;
 
-        let provider = create_llm_provider(&cfg);
+        let provider = create_llm_provider(&cfg, self.config.request_log_store.clone());
         self.llm_provider_cache.insert(cache_key, provider.clone());
         Ok(provider)
     }
@@ -569,7 +583,10 @@ impl PipelineInner {
 }
 
 /// Create an LLM provider based on configuration
-fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
+fn create_llm_provider(
+    config: &LlmConfig,
+    request_log_store: Option<RequestLogStore>,
+) -> Arc<dyn LlmProvider> {
     match config.provider.as_str() {
         "anthropic" => {
             let provider = if let Some(model) = &config.model {
@@ -580,6 +597,7 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             Arc::new(
                 provider
                     .with_timeout(config.timeout)
+                    .with_request_log_store(request_log_store.clone())
                     .with_thinking_budget(config.anthropic_thinking_budget),
             )
         }
@@ -589,7 +607,11 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             } else {
                 GroqLlmProvider::new(config.api_key.clone())
             };
-            Arc::new(provider.with_timeout(config.timeout))
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_request_log_store(request_log_store.clone()),
+            )
         }
         "gemini" => {
             let provider = if let Some(model) = &config.model {
@@ -601,6 +623,7 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             Arc::new(
                 provider
                     .with_timeout(config.timeout)
+                    .with_request_log_store(request_log_store.clone())
                     .with_thinking_budget(config.gemini_thinking_budget)
                     .with_thinking_level(config.gemini_thinking_level.clone()),
             )
@@ -613,7 +636,11 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
                     .unwrap_or_else(|| "http://localhost:11434".to_string()),
                 config.model.clone(),
             );
-            Arc::new(provider.with_timeout(config.timeout))
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_request_log_store(request_log_store.clone()),
+            )
         }
         _ => {
             // Default to OpenAI
@@ -625,6 +652,7 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             Arc::new(
                 provider
                     .with_timeout(config.timeout)
+                    .with_request_log_store(request_log_store.clone())
                     .with_reasoning_effort(config.openai_reasoning_effort.clone()),
             )
         }

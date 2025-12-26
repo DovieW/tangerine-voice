@@ -2,8 +2,10 @@
 
 use super::{LlmError, LlmProvider};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::time::Duration;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
@@ -17,6 +19,7 @@ pub struct OllamaLlmProvider {
     base_url: String,
     model: String,
     timeout: Option<Duration>,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl OllamaLlmProvider {
@@ -27,6 +30,7 @@ impl OllamaLlmProvider {
             base_url: DEFAULT_OLLAMA_URL.to_string(),
             model: DEFAULT_MODEL.to_string(),
             timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
+            request_log_store: None,
         }
     }
 
@@ -38,6 +42,7 @@ impl OllamaLlmProvider {
             base_url: DEFAULT_OLLAMA_URL.to_string(),
             model,
             timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
+            request_log_store: None,
         }
     }
 
@@ -48,6 +53,7 @@ impl OllamaLlmProvider {
             base_url,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
+            request_log_store: None,
         }
     }
 
@@ -59,7 +65,13 @@ impl OllamaLlmProvider {
             base_url: base_url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string()),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             timeout: Some(DEFAULT_OLLAMA_TIMEOUT),
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 
     /// Set the request timeout
@@ -191,6 +203,18 @@ impl LlmProvider for OllamaLlmProvider {
             }),
         };
 
+        if let Some(store) = &self.request_log_store {
+            let request_json = serde_json::to_value(&request).unwrap_or_else(|_| {
+                json!({
+                    "provider": "ollama",
+                    "error": "failed to serialize request",
+                })
+            });
+            store.with_current(|log| {
+                log.llm_request_json = Some(request_json);
+            });
+        }
+
         let mut req = self.client.post(&url).json(&request);
         if let Some(timeout) = self.timeout {
             req = req.timeout(timeout);
@@ -230,11 +254,23 @@ impl LlmProvider for OllamaLlmProvider {
             )));
         }
 
-        let chat_response: ChatResponse = response.json().await.map_err(|e| {
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
             LlmError::InvalidResponse(format!("Failed to parse response: {}", e))
         })?;
 
-        Ok(chat_response.message.content)
+        if let Some(store) = &self.request_log_store {
+            let response_for_log = response_json.clone();
+            store.with_current(|log| {
+                log.llm_response_json = Some(response_for_log);
+            });
+        }
+
+        response_json
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| LlmError::InvalidResponse("No message content in response".to_string()))
     }
 
     fn name(&self) -> &'static str {

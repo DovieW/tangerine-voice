@@ -1485,6 +1485,13 @@ export interface RequestLog {
   status: RequestStatus;
   error_message: string | null;
   entries: LogEntry[];
+
+  // Optional provider payloads for debugging.
+  // Binary audio is redacted and represented with placeholders.
+  stt_request_json?: unknown;
+  stt_response_json?: unknown;
+  llm_request_json?: unknown;
+  llm_response_json?: unknown;
 }
 
 export interface RecordingsStats {

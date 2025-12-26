@@ -15,6 +15,7 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { listen } from "@tauri-apps/api/event";
+import { useDisclosure } from "@mantine/hooks";
 import {
   AlertCircle,
   AlertTriangle,
@@ -33,6 +34,7 @@ import {
 import { useEffect, useState } from "react";
 import { useClearRequestLogs, useRequestLogs } from "../lib/queries";
 import { useRecordingPlayer } from "../lib/useRecordingPlayer";
+import { LogJsonModal } from "./LogJsonModal";
 import type {
   LogEntry,
   LogLevel,
@@ -175,6 +177,8 @@ function RequestLogItem({
   log: RequestLog;
   player: ReturnType<typeof useRecordingPlayer>;
 }) {
+  const [jsonOpened, jsonModal] = useDisclosure(false);
+
   // NOTE: `llm_provider`/`llm_model` can reflect configured defaults.
   // Use `llm_duration_ms` to indicate whether an LLM rewrite was actually attempted.
   const llmAttempted = log.llm_duration_ms !== null;
@@ -423,20 +427,26 @@ function RequestLogItem({
                 )}
               </CopyButton>
             )}
-            <CopyButton value={JSON.stringify(log, null, 2)}>
-              {({ copied, copy }) => (
-                <Button
-                  variant="subtle"
-                  color={copied ? "teal" : "gray"}
-                  size="xs"
-                  leftSection={<Copy size={14} />}
-                  onClick={copy}
-                >
-                  {copied ? "Copied!" : "Copy Full Log (JSON)"}
-                </Button>
-              )}
-            </CopyButton>
+            <Button
+              variant="subtle"
+              color="gray"
+              size="xs"
+              onClick={(e) => {
+                // Avoid accordion toggle.
+                e.preventDefault();
+                e.stopPropagation();
+                jsonModal.open();
+              }}
+            >
+              JSON
+            </Button>
           </Group>
+
+          <LogJsonModal
+            opened={jsonOpened}
+            onClose={jsonModal.close}
+            log={log}
+          />
         </Stack>
       </Accordion.Panel>
     </Accordion.Item>

@@ -2,7 +2,9 @@
 
 use super::{AudioFormat, SttError, SttProvider};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::multipart;
+use serde_json::json;
 use std::time::Duration;
 
 /// Groq Whisper API provider for speech-to-text
@@ -11,6 +13,7 @@ pub struct GroqSttProvider {
     api_key: String,
     model: String,
     default_prompt: Option<String>,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl GroqSttProvider {
@@ -33,6 +36,7 @@ impl GroqSttProvider {
             api_key,
             model: model.unwrap_or_else(|| "whisper-large-v3-turbo".to_string()),
             default_prompt,
+            request_log_store: None,
         }
     }
 
@@ -49,7 +53,13 @@ impl GroqSttProvider {
             api_key,
             model: model.unwrap_or_else(|| "whisper-large-v3-turbo".to_string()),
             default_prompt,
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 
     fn clamp_prompt(prompt: &str) -> Option<String> {
@@ -66,6 +76,32 @@ impl GroqSttProvider {
 #[async_trait]
 impl SttProvider for GroqSttProvider {
     async fn transcribe(&self, audio: &[u8], _format: &AudioFormat) -> Result<String, SttError> {
+        if let Some(store) = &self.request_log_store {
+            let prompt = self
+                .default_prompt
+                .as_deref()
+                .and_then(Self::clamp_prompt);
+            let request_json = json!({
+                "provider": "groq",
+                "endpoint": "https://api.groq.com/openai/v1/audio/transcriptions",
+                "content_type": "multipart/form-data",
+                "fields": {
+                    "model": self.model,
+                    "prompt": prompt,
+                },
+                "file": {
+                    "name": "audio.wav",
+                    "mime": "audio/wav",
+                    "bytes": audio.len(),
+                    "data": "<binary audio omitted>",
+                }
+            });
+
+            store.with_current(|log| {
+                log.stt_request_json = Some(request_json);
+            });
+        }
+
         let part = multipart::Part::bytes(audio.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")
@@ -105,6 +141,13 @@ impl SttProvider for GroqSttProvider {
         }
 
         let result: serde_json::Value = response.json().await?;
+
+        if let Some(store) = &self.request_log_store {
+            let result_for_log = result.clone();
+            store.with_current(|log| {
+                log.stt_response_json = Some(result_for_log);
+            });
+        }
         let text = result["text"]
             .as_str()
             .unwrap_or("")

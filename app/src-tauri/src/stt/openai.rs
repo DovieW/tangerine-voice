@@ -6,6 +6,7 @@
 
 use super::{AudioFormat, SttError, SttProvider};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::multipart;
 use serde_json::json;
 use std::time::Duration;
@@ -16,6 +17,7 @@ pub struct OpenAiSttProvider {
     api_key: String,
     model: String,
     default_prompt: Option<String>,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl OpenAiSttProvider {
@@ -44,6 +46,7 @@ impl OpenAiSttProvider {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
+            request_log_store: None,
         }
     }
 
@@ -64,7 +67,13 @@ impl OpenAiSttProvider {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 
     /// Check if this model should use /v1/audio/transcriptions.
@@ -104,6 +113,29 @@ impl OpenAiSttProvider {
         audio: &[u8],
         prompt: Option<&str>,
     ) -> Result<String, SttError> {
+        if let Some(store) = &self.request_log_store {
+            let prompt = self.clamp_prompt_for_model(prompt);
+            let request_json = json!({
+                "provider": "openai",
+                "endpoint": "https://api.openai.com/v1/audio/transcriptions",
+                "content_type": "multipart/form-data",
+                "fields": {
+                    "model": self.model,
+                    "prompt": prompt,
+                },
+                "file": {
+                    "name": "audio.wav",
+                    "mime": "audio/wav",
+                    "bytes": audio.len(),
+                    "data": "<binary audio omitted>",
+                }
+            });
+
+            store.with_current(|log| {
+                log.stt_request_json = Some(request_json);
+            });
+        }
+
         let part = multipart::Part::bytes(audio.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")
@@ -139,6 +171,14 @@ impl OpenAiSttProvider {
         }
 
         let result: serde_json::Value = response.json().await?;
+
+        if let Some(store) = &self.request_log_store {
+            let result_for_log = result.clone();
+            store.with_current(|log| {
+                log.stt_response_json = Some(result_for_log);
+            });
+        }
+
         let text = result["text"].as_str().unwrap_or("").to_string();
 
         Ok(text)
@@ -230,6 +270,43 @@ impl OpenAiSttProvider {
             }
         });
 
+        if let Some(store) = &self.request_log_store {
+            let request_json = json!({
+                "provider": "openai",
+                "endpoint": "https://api.openai.com/v1/responses",
+                "body": {
+                    "model": self.model,
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_audio",
+                                    "input_audio": {
+                                        "data": "<base64 audio omitted>",
+                                        "format": "wav",
+                                        "bytes": audio.len(),
+                                        "base64_len": audio_base64.len(),
+                                    }
+                                },
+                                {
+                                    "type": "text",
+                                    "text": instruction
+                                }
+                            ]
+                        }
+                    ],
+                    "text": {
+                        "format": {"type": "text"}
+                    }
+                }
+            });
+
+            store.with_current(|log| {
+                log.stt_request_json = Some(request_json);
+            });
+        }
+
         let response = self
             .client
             .post("https://api.openai.com/v1/responses")
@@ -252,6 +329,14 @@ impl OpenAiSttProvider {
         }
 
         let result: serde_json::Value = response.json().await?;
+
+        if let Some(store) = &self.request_log_store {
+            let result_for_log = result.clone();
+            store.with_current(|log| {
+                log.stt_response_json = Some(result_for_log);
+            });
+        }
+
         Self::extract_responses_output_text(&result)
     }
 

@@ -93,6 +93,11 @@ fn ensure_default_settings(app: &AppHandle) -> Result<(), Box<dyn std::error::Er
 
     let store = app.store("settings.json")?;
 
+    // Keep these defaults aligned with pipeline defaults / expected backend behavior.
+    // We intentionally seed these so a brand new install has the same effective
+    // settings that the pipeline will use at runtime (and what the UI shows).
+    let default_pipeline_config = crate::pipeline::PipelineConfig::default();
+
     let is_missing = |v: Option<Value>| -> bool {
         matches!(v, None | Some(Value::Null))
     };
@@ -105,7 +110,6 @@ fn ensure_default_settings(app: &AppHandle) -> Result<(), Box<dyn std::error::Er
         }
     };
 
-    // Keep these defaults aligned with pipeline defaults / expected backend behavior.
     set_if_missing("stt_provider", json!("groq"));
     set_if_missing("stt_transcription_prompt", json!(null));
     set_if_missing("stt_timeout_seconds", json!(10.0));
@@ -154,6 +158,54 @@ fn ensure_default_settings(app: &AppHandle) -> Result<(), Box<dyn std::error::Er
     set_if_missing(
         "vad_settings",
         serde_json::to_value(settings::VadSettings::default())?,
+    );
+
+    // Audio + quiet-recording gating.
+    set_if_missing(
+        "quiet_audio_gate_enabled",
+        json!(default_pipeline_config.quiet_audio_gate_enabled),
+    );
+    set_if_missing(
+        "quiet_audio_min_duration_secs",
+        json!(default_pipeline_config.quiet_audio_min_duration_secs),
+    );
+    set_if_missing(
+        "quiet_audio_rms_dbfs_threshold",
+        json!(default_pipeline_config.quiet_audio_rms_dbfs_threshold),
+    );
+    set_if_missing(
+        "quiet_audio_peak_dbfs_threshold",
+        json!(default_pipeline_config.quiet_audio_peak_dbfs_threshold),
+    );
+    set_if_missing(
+        "quiet_audio_require_speech",
+        json!(default_pipeline_config.quiet_audio_require_speech),
+    );
+
+    // Stop-time preprocessing defaults.
+    set_if_missing(
+        "noise_gate_threshold_dbfs",
+        json!(default_pipeline_config.noise_gate_threshold_dbfs),
+    );
+    set_if_missing(
+        "audio_downmix_to_mono",
+        json!(default_pipeline_config.audio_downmix_to_mono),
+    );
+    set_if_missing(
+        "audio_resample_to_16khz",
+        json!(default_pipeline_config.audio_resample_to_16khz),
+    );
+    set_if_missing(
+        "audio_highpass_enabled",
+        json!(default_pipeline_config.audio_highpass_enabled),
+    );
+    set_if_missing(
+        "audio_agc_enabled",
+        json!(default_pipeline_config.audio_agc_enabled),
+    );
+    set_if_missing(
+        "audio_noise_suppression_enabled",
+        json!(default_pipeline_config.audio_noise_suppression_enabled),
     );
 
     if dirty {
@@ -2035,6 +2087,9 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
             ..Default::default()
         },
         llm_api_keys,
+
+        // Allow providers to enrich the active RequestLog with request/response payloads.
+        request_log_store: app.try_state::<RequestLogStore>().map(|s| s.inner().clone()),
     };
 
     log::info!(

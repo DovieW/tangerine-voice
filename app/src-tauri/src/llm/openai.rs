@@ -2,6 +2,7 @@
 
 use super::{LlmError, LlmProvider, DEFAULT_LLM_TIMEOUT};
 use async_trait::async_trait;
+use crate::request_log::RequestLogStore;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,6 +18,7 @@ pub struct OpenAiLlmProvider {
     model: String,
     timeout: Option<Duration>,
     reasoning_effort: Option<String>,
+    request_log_store: Option<RequestLogStore>,
 }
 
 impl OpenAiLlmProvider {
@@ -28,6 +30,7 @@ impl OpenAiLlmProvider {
             model: DEFAULT_MODEL.to_string(),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             reasoning_effort: None,
+            request_log_store: None,
         }
     }
 
@@ -39,6 +42,7 @@ impl OpenAiLlmProvider {
             model,
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             reasoning_effort: None,
+            request_log_store: None,
         }
     }
 
@@ -51,7 +55,13 @@ impl OpenAiLlmProvider {
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             reasoning_effort: None,
+            request_log_store: None,
         }
+    }
+
+    pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
+        self.request_log_store = store;
+        self
     }
 
     /// Set the request timeout
@@ -337,6 +347,18 @@ impl LlmProvider for OpenAiLlmProvider {
             }),
         };
 
+        if let Some(store) = &self.request_log_store {
+            let request_json = serde_json::to_value(&request).unwrap_or_else(|_| {
+                json!({
+                    "provider": "openai",
+                    "error": "failed to serialize request",
+                })
+            });
+            store.with_current(|log| {
+                log.llm_request_json = Some(request_json);
+            });
+        }
+
         let mut req = self
             .client
             .post(OPENAI_API_URL)
@@ -378,6 +400,13 @@ impl LlmProvider for OpenAiLlmProvider {
         let response_json: serde_json::Value = response.json().await.map_err(|e| {
             LlmError::InvalidResponse(format!("Failed to parse response: {}", e))
         })?;
+
+        if let Some(store) = &self.request_log_store {
+            let response_for_log = response_json.clone();
+            store.with_current(|log| {
+                log.llm_response_json = Some(response_for_log);
+            });
+        }
 
         let output_text = Self::extract_responses_output_text(&response_json)?;
 
