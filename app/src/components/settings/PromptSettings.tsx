@@ -25,12 +25,16 @@ import {
   useUpdateCleanupPromptSections,
   useUpdateLLMModel,
   useUpdateLLMProvider,
+  useUpdateOpenAiReasoningEffort,
+  useUpdateAnthropicThinkingBudget,
   useUpdateRewriteProgramPromptProfiles,
   useUpdateRewriteLlmEnabled,
   useUpdateSTTModel,
   useUpdateSTTProvider,
   useUpdateSTTTranscriptionPrompt,
   useUpdateSTTTimeout,
+  useUpdateGeminiThinkingBudget,
+  useUpdateGeminiThinkingLevel,
 } from "../../lib/queries";
 import {
   type CleanupPromptSections,
@@ -39,6 +43,7 @@ import {
   tauriAPI,
 } from "../../lib/tauri";
 import { LLM_MODELS, STT_MODELS } from "../../lib/modelOptions";
+import { HintSelect } from "../HintSelect";
 import { PromptSectionEditor } from "./PromptSectionEditor";
 
 const INHERIT_TOOLTIP = "Inheriting from Default profile";
@@ -98,6 +103,9 @@ export function PromptSettings({
 }: {
   editingProfileId?: string;
 }) {
+  const activeProfileId = editingProfileId ?? "default";
+  const isDefaultScope = activeProfileId === "default";
+
   const { data: settings, isLoading: isLoadingSettings } = useSettings();
   const { data: defaultSections, isLoading: isLoadingDefaultSections } =
     useDefaultSections();
@@ -117,9 +125,11 @@ export function PromptSettings({
   const updateSTTTranscriptionPrompt = useUpdateSTTTranscriptionPrompt();
   const updateLLMProvider = useUpdateLLMProvider();
   const updateLLMModel = useUpdateLLMModel();
+  const updateOpenAiReasoningEffort = useUpdateOpenAiReasoningEffort();
+  const updateAnthropicThinkingBudget = useUpdateAnthropicThinkingBudget();
+  const updateGeminiThinkingBudget = useUpdateGeminiThinkingBudget();
+  const updateGeminiThinkingLevel = useUpdateGeminiThinkingLevel();
   const updateSTTTimeout = useUpdateSTTTimeout();
-
-  const activeProfileId = editingProfileId ?? "default";
 
   const profiles: RewriteProgramPromptProfile[] =
     settings?.rewrite_program_prompt_profiles ?? [];
@@ -505,6 +515,257 @@ export function PromptSettings({
     ? LLM_MODELS[effectiveLlmProvider] ?? []
     : [];
 
+  const effectiveLlmModel =
+    effectiveLlmProvider === null
+      ? null
+      : activeProfileId === "default"
+      ? settings?.llm_model ?? null
+      : localProfileLlmModel ?? settings?.llm_model ?? null;
+
+  // Thinking controls are global settings today (not per-profile), so we only
+  // show them in the Default scope.
+  const supportsOpenAiThinking =
+    isDefaultScope &&
+    effectiveLlmProvider === "openai" &&
+    !!effectiveLlmModel &&
+    (effectiveLlmModel.startsWith("gpt-5") ||
+      effectiveLlmModel.startsWith("o"));
+
+  const supportsGeminiThinkingLevel =
+    isDefaultScope &&
+    effectiveLlmProvider === "gemini" &&
+    !!effectiveLlmModel &&
+    effectiveLlmModel.includes("gemini-3");
+
+  const supportsGeminiThinkingBudget =
+    isDefaultScope &&
+    effectiveLlmProvider === "gemini" &&
+    !!effectiveLlmModel &&
+    effectiveLlmModel.includes("gemini-2.5") &&
+    !effectiveLlmModel.includes("flash-lite");
+
+  const supportsAnthropicThinkingBudget =
+    isDefaultScope &&
+    effectiveLlmProvider === "anthropic" &&
+    !!effectiveLlmModel &&
+    // Extended thinking is supported by newer Claude families. Keep conservative.
+    (effectiveLlmModel.includes("claude-3-7") ||
+      effectiveLlmModel.includes("claude-4") ||
+      effectiveLlmModel.includes("-4-"));
+
+  // Mantine Select requires option values to be strings.
+  const SELECT_DEFAULT = "default";
+
+  const openAiThinkingEffortsForModel = (model: string): string[] => {
+    // OpenAI docs (2025-12):
+    // - gpt-5.1 supports: none, low, medium, high
+    // - models before gpt-5.1 do not support `none`
+    // - gpt-5-pro defaults to and only supports `high`
+    if (model.startsWith("gpt-5-pro")) {
+      return ["high"];
+    }
+    if (model.startsWith("gpt-5.2") || model.startsWith("gpt-5.1")) {
+      return ["none", "low", "medium", "high"];
+    }
+    if (model.startsWith("gpt-5")) {
+      return ["low", "medium", "high"];
+    }
+    if (model.startsWith("o")) {
+      return ["low", "medium", "high"];
+    }
+    return [];
+  };
+
+  const openAiDefaultReasoningEffortForModel = (model: string): string => {
+    // OpenAI docs (2025-12):
+    // - gpt-5.1 defaults to `none`
+    // - models before gpt-5.1 default to `medium`
+    // - gpt-5-pro defaults to `high`
+    if (model.startsWith("gpt-5-pro")) return "high";
+    if (model.startsWith("gpt-5.2") || model.startsWith("gpt-5.1"))
+      return "none";
+    return "medium";
+  };
+
+  const openAiThinkingOptions =
+    !supportsOpenAiThinking || !effectiveLlmModel
+      ? []
+      : [
+          { value: SELECT_DEFAULT, label: "Default" },
+          ...openAiThinkingEffortsForModel(effectiveLlmModel).map((v) => ({
+            value: v,
+            label: v === "none" ? "None" : v[0].toUpperCase() + v.slice(1),
+          })),
+        ];
+
+  const isGemini3Flash =
+    supportsGeminiThinkingLevel &&
+    effectiveLlmModel?.includes("gemini-3-flash");
+  const isGemini3Pro =
+    supportsGeminiThinkingLevel && effectiveLlmModel?.includes("gemini-3-pro");
+
+  const geminiThinkingLevelOptions = isGemini3Flash
+    ? [
+        { value: SELECT_DEFAULT, label: "Default" },
+        { value: "minimal", label: "Minimal" },
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High" },
+      ]
+    : [
+        { value: SELECT_DEFAULT, label: "Default" },
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+      ];
+
+  const canDisableGemini25Thinking =
+    supportsGeminiThinkingBudget &&
+    !!effectiveLlmModel &&
+    effectiveLlmModel.includes("gemini-2.5-flash") &&
+    !effectiveLlmModel.includes("gemini-2.5-pro");
+
+  const isGemini25Pro =
+    supportsGeminiThinkingBudget &&
+    !!effectiveLlmModel &&
+    effectiveLlmModel.includes("gemini-2.5-pro");
+
+  const gemini25MaxBudget = isGemini25Pro ? 32768 : 24576;
+  const gemini25MinBudget = isGemini25Pro ? 128 : 0;
+
+  const geminiThinkingBudgetOptions: Array<{ value: string; label: string }> = [
+    { value: SELECT_DEFAULT, label: "Default" },
+    { value: "-1", label: "Dynamic (-1)" },
+    ...(canDisableGemini25Thinking ? [{ value: "0", label: "Off (0)" }] : []),
+    ...(isGemini25Pro
+      ? [{ value: String(gemini25MinBudget), label: "Minimal (128)" }]
+      : []),
+    { value: "1024", label: "Light (1024)" },
+    { value: "4096", label: "Medium (4096)" },
+    { value: "16384", label: "High (16384)" },
+    ...(gemini25MaxBudget > 16384
+      ? [
+          {
+            value: String(gemini25MaxBudget),
+            label: `Max (${gemini25MaxBudget})`,
+          },
+        ]
+      : []),
+  ];
+
+  // Anthropic "extended thinking" is controlled via a numeric token budget.
+  // We present it as a simple level selector and map levels -> budgets.
+  const ANTHROPIC_THINKING_LEVEL_BUDGETS = [2000, 4000, 8000, 32000] as const;
+
+  const anthropicThinkingLevelOptions: Array<{ value: string; label: string }> =
+    [
+      { value: SELECT_DEFAULT, label: "Default" },
+      { value: String(ANTHROPIC_THINKING_LEVEL_BUDGETS[0]), label: "Low" },
+      { value: String(ANTHROPIC_THINKING_LEVEL_BUDGETS[1]), label: "Medium" },
+      { value: String(ANTHROPIC_THINKING_LEVEL_BUDGETS[2]), label: "High" },
+      { value: String(ANTHROPIC_THINKING_LEVEL_BUDGETS[3]), label: "Max" },
+    ];
+
+  const anthropicThinkingLevelOptionsWithCustom = (() => {
+    const v = settings?.anthropic_thinking_budget;
+    if (v == null) return anthropicThinkingLevelOptions;
+
+    const asString = String(v);
+    const exists = anthropicThinkingLevelOptions.some(
+      (o) => o.value === asString
+    );
+    if (exists) return anthropicThinkingLevelOptions;
+
+    return [
+      ...anthropicThinkingLevelOptions,
+      { value: asString, label: `Custom (${v})` },
+    ];
+  })();
+
+  const formatThinkingBudgetShort = (budgetTokens: number): string => {
+    if (!Number.isFinite(budgetTokens) || budgetTokens <= 0)
+      return String(budgetTokens);
+    if (budgetTokens >= 1000) {
+      const k = budgetTokens / 1000;
+      const pretty = Number.isInteger(k)
+        ? String(k)
+        : k.toFixed(1).replace(/\.0$/, "");
+      return `${pretty}k`;
+    }
+    return String(budgetTokens);
+  };
+
+  const handleOpenAiThinkingChange = (value: string | null) => {
+    if (value == null || value === SELECT_DEFAULT) {
+      updateOpenAiReasoningEffort.mutate(null, {
+        onSuccess: () => {
+          tauriAPI.emitSettingsChanged();
+        },
+      });
+      return;
+    }
+
+    // Keep this permissive; backend will validate per-model too.
+    const v = value;
+    updateOpenAiReasoningEffort.mutate(v, {
+      onSuccess: () => {
+        tauriAPI.emitSettingsChanged();
+      },
+    });
+  };
+
+  const handleGeminiThinkingLevelChange = (value: string | null) => {
+    const v =
+      value === "minimal" ||
+      value === "low" ||
+      value === "medium" ||
+      value === "high"
+        ? value
+        : null;
+    updateGeminiThinkingLevel.mutate(v, {
+      onSuccess: () => {
+        tauriAPI.emitSettingsChanged();
+      },
+    });
+  };
+
+  const handleGeminiThinkingBudgetChange = (value: string | null) => {
+    if (value == null || value === SELECT_DEFAULT) {
+      updateGeminiThinkingBudget.mutate(null, {
+        onSuccess: () => {
+          tauriAPI.emitSettingsChanged();
+        },
+      });
+      return;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    updateGeminiThinkingBudget.mutate(parsed, {
+      onSuccess: () => {
+        tauriAPI.emitSettingsChanged();
+      },
+    });
+  };
+
+  const handleAnthropicThinkingBudgetChange = (value: string | null) => {
+    if (value == null || value === SELECT_DEFAULT) {
+      updateAnthropicThinkingBudget.mutate(null, {
+        onSuccess: () => {
+          tauriAPI.emitSettingsChanged();
+        },
+      });
+      return;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    updateAnthropicThinkingBudget.mutate(parsed, {
+      onSuccess: () => {
+        tauriAPI.emitSettingsChanged();
+      },
+    });
+  };
+
   const baseStoredSections: CleanupPromptSections =
     settings?.cleanup_prompt_sections ?? DEFAULT_SECTIONS;
 
@@ -777,8 +1038,6 @@ export function PromptSettings({
       </div>
     );
   }
-
-  const isDefaultScope = activeProfileId === "default";
 
   return (
     <>
@@ -1212,7 +1471,7 @@ export function PromptSettings({
                     }}
                   >
                     <Text size="sm" c="dimmed">
-                      Test with last created audio
+                      Test with last created audio (and test audio settings)
                     </Text>
                     <Tooltip
                       label={
@@ -1539,6 +1798,364 @@ export function PromptSettings({
           </div>
         </div>
       ) : null}
+
+      {supportsOpenAiThinking && (
+        <div className="settings-row">
+          <div>
+            <p className="settings-label">Thinking</p>
+            <p className="settings-description">
+              Set the reasoning effort for this model.
+            </p>
+          </div>
+          <HintSelect
+            data={openAiThinkingOptions}
+            value={settings?.openai_reasoning_effort ?? SELECT_DEFAULT}
+            onChange={handleOpenAiThinkingChange}
+            placeholder="Default"
+            inputStyle={{
+              backgroundColor: "var(--bg-elevated)",
+              borderColor: "var(--border-default)",
+              color: "var(--text-primary)",
+              minWidth: 200,
+            }}
+            renderSelected={({ option, placeholder }) => {
+              if (!option) {
+                return (
+                  <Text size="sm" c="dimmed">
+                    {placeholder}
+                  </Text>
+                );
+              }
+
+              if (option.value !== SELECT_DEFAULT) {
+                return <Text size="sm">{option.label}</Text>;
+              }
+
+              const hint = effectiveLlmModel
+                ? openAiDefaultReasoningEffortForModel(effectiveLlmModel)
+                : "medium";
+
+              return (
+                <div
+                  style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                >
+                  <span style={{ fontSize: 14 }}>{option.label}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                      opacity: 0.9,
+                      lineHeight: 1,
+                    }}
+                  >
+                    · {hint}
+                  </span>
+                </div>
+              );
+            }}
+            renderOption={({ option }) => {
+              if (option.value !== SELECT_DEFAULT) {
+                return <Text size="sm">{option.label}</Text>;
+              }
+
+              const hint = effectiveLlmModel
+                ? openAiDefaultReasoningEffortForModel(effectiveLlmModel)
+                : "medium";
+
+              return (
+                <div
+                  style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                >
+                  <span style={{ fontSize: 14 }}>{option.label}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                      opacity: 0.9,
+                      lineHeight: 1,
+                    }}
+                  >
+                    · {hint}
+                  </span>
+                </div>
+              );
+            }}
+          />
+        </div>
+      )}
+
+      {supportsGeminiThinkingLevel && (
+        <div className="settings-row">
+          <div>
+            <p className="settings-label">Thinking Level</p>
+            <p className="settings-description">
+              {isGemini3Pro
+                ? "Gemini 3 Pro supports low/high (default high)."
+                : "Gemini 3 Flash supports minimal/low/medium/high (default high)."}
+            </p>
+          </div>
+          <HintSelect
+            data={geminiThinkingLevelOptions}
+            value={settings?.gemini_thinking_level ?? SELECT_DEFAULT}
+            onChange={handleGeminiThinkingLevelChange}
+            placeholder="Default"
+            inputStyle={{
+              backgroundColor: "var(--bg-elevated)",
+              borderColor: "var(--border-default)",
+              color: "var(--text-primary)",
+              minWidth: 200,
+            }}
+            renderSelected={({ option, placeholder }) => {
+              if (!option) {
+                return (
+                  <Text size="sm" c="dimmed">
+                    {placeholder}
+                  </Text>
+                );
+              }
+              if (option.value !== SELECT_DEFAULT)
+                return <Text size="sm">{option.label}</Text>;
+
+              return (
+                <div
+                  style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                >
+                  <span style={{ fontSize: 14 }}>{option.label}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                      opacity: 0.9,
+                      lineHeight: 1,
+                    }}
+                  >
+                    · high
+                  </span>
+                </div>
+              );
+            }}
+            renderOption={({ option }) => {
+              if (option.value !== SELECT_DEFAULT) {
+                return <Text size="sm">{option.label}</Text>;
+              }
+
+              return (
+                <div
+                  style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                >
+                  <span style={{ fontSize: 14 }}>{option.label}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                      opacity: 0.9,
+                      lineHeight: 1,
+                    }}
+                  >
+                    · high
+                  </span>
+                </div>
+              );
+            }}
+          />
+        </div>
+      )}
+
+      {supportsGeminiThinkingBudget && (
+        <div className="settings-row">
+          <div>
+            <p className="settings-label">Thinking Budget</p>
+            <p className="settings-description">
+              Token budget for Gemini 2.5 thinking.
+            </p>
+          </div>
+          <HintSelect
+            data={geminiThinkingBudgetOptions}
+            value={
+              settings?.gemini_thinking_budget == null
+                ? SELECT_DEFAULT
+                : String(settings.gemini_thinking_budget)
+            }
+            onChange={handleGeminiThinkingBudgetChange}
+            placeholder="Default"
+            inputStyle={{
+              backgroundColor: "var(--bg-elevated)",
+              borderColor: "var(--border-default)",
+              color: "var(--text-primary)",
+              minWidth: 200,
+            }}
+            renderSelected={({ option, placeholder }) => {
+              if (!option) {
+                return (
+                  <Text size="sm" c="dimmed">
+                    {placeholder}
+                  </Text>
+                );
+              }
+              if (option.value !== SELECT_DEFAULT)
+                return <Text size="sm">{option.label}</Text>;
+
+              return (
+                <div
+                  style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                >
+                  <span style={{ fontSize: 14 }}>{option.label}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                      opacity: 0.9,
+                      lineHeight: 1,
+                    }}
+                  >
+                    · dynamic
+                  </span>
+                </div>
+              );
+            }}
+            renderOption={({ option }) => {
+              if (option.value !== SELECT_DEFAULT) {
+                return <Text size="sm">{option.label}</Text>;
+              }
+
+              return (
+                <div
+                  style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                >
+                  <span style={{ fontSize: 14 }}>{option.label}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                      opacity: 0.9,
+                      lineHeight: 1,
+                    }}
+                  >
+                    · dynamic
+                  </span>
+                </div>
+              );
+            }}
+          />
+        </div>
+      )}
+
+      {supportsAnthropicThinkingBudget && (
+        <div className="settings-row">
+          <div>
+            <p className="settings-label">Thinking</p>
+            <p className="settings-description">
+              Extended thinking level for Claude models.
+            </p>
+          </div>
+          <HintSelect
+            data={anthropicThinkingLevelOptionsWithCustom}
+            value={
+              settings?.anthropic_thinking_budget == null
+                ? SELECT_DEFAULT
+                : String(settings.anthropic_thinking_budget)
+            }
+            onChange={handleAnthropicThinkingBudgetChange}
+            placeholder="Default"
+            inputStyle={{
+              backgroundColor: "var(--bg-elevated)",
+              borderColor: "var(--border-default)",
+              color: "var(--text-primary)",
+              minWidth: 200,
+            }}
+            renderSelected={({ option, placeholder }) => {
+              if (!option) {
+                return (
+                  <Text size="sm" c="dimmed">
+                    {placeholder}
+                  </Text>
+                );
+              }
+
+              if (option.value === SELECT_DEFAULT) {
+                return (
+                  <div
+                    style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                  >
+                    <span style={{ fontSize: 14 }}>{option.label}</span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: "var(--text-muted)",
+                        opacity: 0.9,
+                        lineHeight: 1,
+                      }}
+                    >
+                      · off
+                    </span>
+                  </div>
+                );
+              }
+
+              // Closed state: keep it simple (label only) unless it's a custom token budget.
+              if (option.label.startsWith("Custom")) {
+                const n = Number(option.value);
+                const suffix = Number.isFinite(n)
+                  ? formatThinkingBudgetShort(n)
+                  : null;
+                return (
+                  <div
+                    style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                  >
+                    <Text size="sm">{option.label}</Text>
+                    {suffix && (
+                      <Text size="xs" c="dimmed" style={{ lineHeight: 1 }}>
+                        {suffix}
+                      </Text>
+                    )}
+                  </div>
+                );
+              }
+
+              return <Text size="sm">{option.label}</Text>;
+            }}
+            renderOption={({ option }) => {
+              if (option.value === SELECT_DEFAULT) {
+                return (
+                  <div
+                    style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                  >
+                    <span style={{ fontSize: 14 }}>{option.label}</span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: "var(--text-muted)",
+                        opacity: 0.9,
+                        lineHeight: 1,
+                      }}
+                    >
+                      · off
+                    </span>
+                  </div>
+                );
+              }
+
+              const n = Number(option.value);
+              const suffix = Number.isFinite(n)
+                ? formatThinkingBudgetShort(n)
+                : null;
+
+              return (
+                <div
+                  style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+                >
+                  <Text size="sm">{option.label}</Text>
+                  {suffix && (
+                    <Text size="xs" c="dimmed" style={{ lineHeight: 1 }}>
+                      {suffix}
+                    </Text>
+                  )}
+                </div>
+              );
+            }}
+          />
+        </div>
+      )}
 
       <div style={{ marginTop: 16 }}>
         <Accordion variant="separated" radius="md">

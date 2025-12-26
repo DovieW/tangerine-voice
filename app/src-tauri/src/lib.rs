@@ -1314,6 +1314,9 @@ pub fn run() {
             commands::recording::pipeline_force_reset,
             commands::recording::pipeline_test_transcribe_last_audio,
             commands::recording::pipeline_has_last_audio,
+            commands::recording::pipeline_get_last_recording_diagnostics,
+            commands::recording::pipeline_test_audio_settings_start_recording,
+            commands::recording::pipeline_test_audio_settings_stop_recording,
             commands::recording::pipeline_retry_transcription,
             // Recording file access (for playback)
             commands::recording::recording_get_wav_path,
@@ -1829,15 +1832,81 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         default_pipeline_config.quiet_audio_peak_dbfs_threshold,
     );
 
-    // Read experimental noise gate settings from store
-    let noise_gate_strength_raw: u64 =
-        get_setting_from_store(app, "noise_gate_strength", 0u64);
-    let noise_gate_strength: u8 = noise_gate_strength_raw.min(100) as u8;
+    // Read experimental noise gate settings from store.
+    // New key is `noise_gate_threshold_dbfs` (Option<f32>), with legacy fallback to
+    // `noise_gate_strength` (0..=100 mapped to -75..-30 dBFS).
+    let sanitize_noise_gate_threshold_dbfs = |v: f32| -> Option<f32> {
+        if !v.is_finite() {
+            return None;
+        }
+        Some(v.clamp(-75.0, -30.0))
+    };
+
+    let noise_gate_threshold_dbfs: Option<f32> = {
+        let raw: Option<f32> = get_setting_from_store(app, "noise_gate_threshold_dbfs", None);
+        if let Some(v) = raw.and_then(sanitize_noise_gate_threshold_dbfs) {
+            Some(v)
+        } else {
+            // Legacy fallback
+            let strength_raw: u64 = get_setting_from_store(app, "noise_gate_strength", 0u64);
+            let strength = (strength_raw.min(100) as u8) as f32;
+            if strength <= 0.0 {
+                None
+            } else {
+                let t = strength / 100.0;
+                Some((-75.0 + (-30.0 + 75.0) * t).clamp(-75.0, -30.0))
+            }
+        }
+    };
+
+    // Read voice-pickup preprocessing toggles from store.
+    let audio_downmix_to_mono: bool = get_setting_from_store(
+        app,
+        "audio_downmix_to_mono",
+        default_pipeline_config.audio_downmix_to_mono,
+    );
+    let audio_resample_to_16khz: bool = get_setting_from_store(
+        app,
+        "audio_resample_to_16khz",
+        default_pipeline_config.audio_resample_to_16khz,
+    );
+    let audio_highpass_enabled: bool = get_setting_from_store(
+        app,
+        "audio_highpass_enabled",
+        default_pipeline_config.audio_highpass_enabled,
+    );
+    let audio_agc_enabled: bool = get_setting_from_store(
+        app,
+        "audio_agc_enabled",
+        default_pipeline_config.audio_agc_enabled,
+    );
+    let audio_noise_suppression_enabled: bool = get_setting_from_store(
+        app,
+        "audio_noise_suppression_enabled",
+        default_pipeline_config.audio_noise_suppression_enabled,
+    );
+
+    let quiet_audio_require_speech: bool = get_setting_from_store(
+        app,
+        "quiet_audio_require_speech",
+        default_pipeline_config.quiet_audio_require_speech,
+    );
 
     // Read LLM settings from store
     let rewrite_llm_enabled: bool = get_setting_from_store(app, "rewrite_llm_enabled", false);
     let llm_provider_setting: Option<String> = get_setting_from_store(app, "llm_provider", None);
     let llm_model_setting: Option<String> = get_setting_from_store(app, "llm_model", None);
+
+    // Optional provider-specific reasoning/thinking knobs.
+    // These are ignored unless the selected provider/model supports them.
+    let openai_reasoning_effort: Option<String> =
+        get_setting_from_store(app, "openai_reasoning_effort", None);
+    let gemini_thinking_budget: Option<i64> =
+        get_setting_from_store(app, "gemini_thinking_budget", None);
+    let gemini_thinking_level: Option<String> =
+        get_setting_from_store(app, "gemini_thinking_level", None);
+    let anthropic_thinking_budget: Option<i64> =
+        get_setting_from_store(app, "anthropic_thinking_budget", None);
 
     // If the user never explicitly selected a model, treat "default" as the provider's
     // concrete default model so request logs can display the exact model used.
@@ -1867,7 +1936,7 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
 
     // Read all available LLM API keys (for per-profile provider overrides at runtime)
     let mut llm_api_keys: HashMap<String, String> = HashMap::new();
-    for provider in ["openai", "anthropic", "groq"] {
+    for provider in ["openai", "anthropic", "groq", "gemini"] {
         let key_name = format!("{}_api_key", provider);
         let key: String = get_setting_from_store(app, &key_name, String::new());
         if !key.is_empty() {
@@ -1942,13 +2011,25 @@ fn initialize_pipeline_from_settings(app: &AppHandle) -> pipeline::SharedPipelin
         quiet_audio_rms_dbfs_threshold,
         quiet_audio_peak_dbfs_threshold,
 
-        noise_gate_strength,
+        noise_gate_threshold_dbfs,
+
+        audio_downmix_to_mono,
+        audio_resample_to_16khz,
+        audio_highpass_enabled,
+        audio_agc_enabled,
+        audio_noise_suppression_enabled,
+
+        quiet_audio_require_speech,
 
         llm_config: llm::LlmConfig {
             enabled: llm_enabled,
             provider: llm_provider_effective,
             api_key: llm_api_key,
             model: llm_model_effective,
+            openai_reasoning_effort,
+            gemini_thinking_budget,
+            gemini_thinking_level,
+            anthropic_thinking_budget,
             prompts: base_prompts,
             program_prompt_profiles,
             ..Default::default()

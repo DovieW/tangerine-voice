@@ -6,12 +6,14 @@
 
 mod anthropic;
 mod defaults;
+mod gemini;
 mod groq;
 mod ollama;
 mod openai;
 mod prompts;
 
 pub use anthropic::AnthropicLlmProvider;
+pub use gemini::GeminiLlmProvider;
 pub use groq::GroqLlmProvider;
 pub use ollama::OllamaLlmProvider;
 pub use openai::OpenAiLlmProvider;
@@ -142,6 +144,24 @@ pub struct LlmConfig {
     pub model: Option<String>,
     /// Base URL for Ollama (default: http://localhost:11434)
     pub ollama_url: Option<String>,
+
+    /// OpenAI reasoning effort (gpt-5 and o-series models only).
+    /// Examples: "low", "medium", "high".
+    pub openai_reasoning_effort: Option<String>,
+
+    /// Gemini thinking controls.
+    ///
+    /// - For Gemini 2.5 models, set `gemini_thinking_budget` (integer token budget).
+    /// - For Gemini 3 Pro, set `gemini_thinking_level` ("low" or "high").
+    /// - For Gemini 3 Flash, set `gemini_thinking_level` ("minimal", "low", "medium", "high").
+    pub gemini_thinking_budget: Option<i64>,
+    pub gemini_thinking_level: Option<String>,
+
+    /// Anthropic extended thinking controls.
+    ///
+    /// When supported by the selected Claude model, setting a budget enables
+    /// extended thinking mode.
+    pub anthropic_thinking_budget: Option<i64>,
     /// Prompt sections configuration
     pub prompts: PromptSections,
     /// Optional per-program prompt overrides (matched against the foreground executable path)
@@ -181,6 +201,10 @@ impl Default for LlmConfig {
             api_key: String::new(),
             model: None,
             ollama_url: None,
+            openai_reasoning_effort: None,
+            gemini_thinking_budget: None,
+            gemini_thinking_level: None,
+            anthropic_thinking_budget: None,
             prompts: PromptSections::default(),
             program_prompt_profiles: Vec::new(),
             timeout: DEFAULT_LLM_TIMEOUT,

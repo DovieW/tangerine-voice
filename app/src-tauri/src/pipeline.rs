@@ -15,10 +15,10 @@
 //! - Multiple provider support (OpenAI, Anthropic, Ollama)
 //! - Configurable prompts for dictation cleanup
 
-use crate::audio_capture::{AudioCapture, AudioCaptureError, AudioCaptureEvent, AudioLevelSnapshot, AudioLevelStats, VadAutoStopConfig};
+use crate::audio_capture::{AudioCapture, AudioCaptureDiagnostics, AudioCaptureError, AudioCaptureEvent, AudioEncodeConfig, AudioLevelSnapshot, AudioLevelStats, VadAutoStopConfig};
 use crate::llm::{
-    format_text, AnthropicLlmProvider, GroqLlmProvider, LlmConfig, LlmError, LlmProvider,
-    OllamaLlmProvider, OpenAiLlmProvider,
+    format_text, AnthropicLlmProvider, GeminiLlmProvider, GroqLlmProvider, LlmConfig, LlmError,
+    LlmProvider, OllamaLlmProvider, OpenAiLlmProvider,
 };
 use crate::stt::{AudioFormat, RetryConfig, SttError, SttProvider, SttRegistry, with_retry};
 use std::collections::HashMap;
@@ -301,11 +301,30 @@ pub struct PipelineConfig {
     /// Peak threshold (in dBFS) below which the audio is considered quiet.
     pub quiet_audio_peak_dbfs_threshold: f32,
 
-    /// Experimental noise gate strength (0-100).
+    /// Optional noise gate threshold (dBFS), applied at stop-time before WAV encoding.
     ///
-    /// This is applied to the captured audio at stop-time (offline) before WAV encoding.
-    /// 0 disables the noise gate.
-    pub noise_gate_strength: u8,
+    /// Recommended range: -75..-30. `None` disables the noise gate.
+    pub noise_gate_threshold_dbfs: Option<f32>,
+
+    // ------------------------------------------------------------------------
+    // Voice pickup (preprocessing) options
+    // ------------------------------------------------------------------------
+    /// Convert captured audio to mono before WAV encoding.
+    pub audio_downmix_to_mono: bool,
+    /// Resample to 16kHz before WAV encoding.
+    pub audio_resample_to_16khz: bool,
+    /// Apply a lightweight high-pass (DC/rumble) filter.
+    pub audio_highpass_enabled: bool,
+    /// Apply a lightweight auto-gain/normalization.
+    pub audio_agc_enabled: bool,
+    /// Apply a lightweight noise suppression.
+    pub audio_noise_suppression_enabled: bool,
+
+    // ------------------------------------------------------------------------
+    // Extra hallucination protection
+    // ------------------------------------------------------------------------
+    /// If enabled, run an offline VAD scan at stop-time and skip STT when no speech is detected.
+    pub quiet_audio_require_speech: bool,
     /// LLM formatting configuration
     pub llm_config: LlmConfig,
     /// API keys for all configured LLM providers (provider id -> key)
@@ -335,7 +354,15 @@ impl Default for PipelineConfig {
             quiet_audio_rms_dbfs_threshold: DEFAULT_QUIET_AUDIO_RMS_DBFS_THRESHOLD,
             quiet_audio_peak_dbfs_threshold: DEFAULT_QUIET_AUDIO_PEAK_DBFS_THRESHOLD,
 
-            noise_gate_strength: 0,
+            noise_gate_threshold_dbfs: None,
+
+            audio_downmix_to_mono: true,
+            audio_resample_to_16khz: false,
+            audio_highpass_enabled: true,
+            audio_agc_enabled: false,
+            audio_noise_suppression_enabled: false,
+
+            quiet_audio_require_speech: false,
 
             llm_config: LlmConfig::default(),
             llm_api_keys: HashMap::new(),
@@ -358,6 +385,9 @@ struct PipelineInner {
 
     /// Last captured audio (WAV bytes). Used for debugging/testing.
     last_wav_bytes: Option<Vec<u8>>,
+
+    /// Last recording diagnostics (raw stats + optional speech detection).
+    last_recording_diagnostics: Option<AudioCaptureDiagnostics>,
 }
 
 impl PipelineInner {
@@ -372,6 +402,7 @@ impl PipelineInner {
             config: config.clone(),
             cancel_token: None,
             last_wav_bytes: None,
+            last_recording_diagnostics: None,
         };
         inner.initialize_providers(&config);
         inner
@@ -483,15 +514,15 @@ impl PipelineInner {
             )));
         }
 
-        let cfg = LlmConfig {
-            enabled: true,
-            provider: provider_id.to_string(),
-            api_key,
-            model,
-            ollama_url,
-            timeout,
-            ..Default::default()
-        };
+        // Preserve global LLM config (including provider-specific knobs) but override the
+        // effective provider/model/timeout for this transcription.
+        let mut cfg = self.config.llm_config.clone();
+        cfg.enabled = true;
+        cfg.provider = provider_id.to_string();
+        cfg.api_key = api_key;
+        cfg.model = model;
+        cfg.ollama_url = ollama_url;
+        cfg.timeout = timeout;
 
         let provider = create_llm_provider(&cfg);
         self.llm_provider_cache.insert(cache_key, provider.clone());
@@ -546,7 +577,11 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             } else {
                 AnthropicLlmProvider::new(config.api_key.clone())
             };
-            Arc::new(provider.with_timeout(config.timeout))
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_thinking_budget(config.anthropic_thinking_budget),
+            )
         }
         "groq" => {
             let provider = if let Some(model) = &config.model {
@@ -555,6 +590,20 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
                 GroqLlmProvider::new(config.api_key.clone())
             };
             Arc::new(provider.with_timeout(config.timeout))
+        }
+        "gemini" => {
+            let provider = if let Some(model) = &config.model {
+                GeminiLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                GeminiLlmProvider::new(config.api_key.clone())
+            };
+
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_thinking_budget(config.gemini_thinking_budget)
+                    .with_thinking_level(config.gemini_thinking_level.clone()),
+            )
         }
         "ollama" => {
             let provider = OllamaLlmProvider::with_url(
@@ -573,7 +622,11 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             } else {
                 OpenAiLlmProvider::new(config.api_key.clone())
             };
-            Arc::new(provider.with_timeout(config.timeout))
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_reasoning_effort(config.openai_reasoning_effort.clone()),
+            )
         }
     }
 }
@@ -667,14 +720,22 @@ impl SharedPipeline {
             return Err(PipelineError::NotRecording);
         }
 
-        let noise_gate_strength = inner.config.noise_gate_strength;
-        match inner
-            .audio_capture
-            .stop_and_get_wav_with_noise_gate(noise_gate_strength)
+        let cfg = AudioEncodeConfig {
+            noise_gate_threshold_dbfs: inner.config.noise_gate_threshold_dbfs,
+            downmix_to_mono: inner.config.audio_downmix_to_mono,
+            resample_to_16khz: inner.config.audio_resample_to_16khz,
+            highpass_enabled: inner.config.audio_highpass_enabled,
+            agc_enabled: inner.config.audio_agc_enabled,
+            noise_suppression_enabled: inner.config.audio_noise_suppression_enabled,
+            detect_speech_presence: inner.config.quiet_audio_require_speech,
+        };
+
+        match inner.audio_capture.stop_and_get_wav_with_diagnostics(cfg)
         {
-            Ok(wav_bytes) => {
+            Ok((wav_bytes, diagnostics)) => {
                 // Keep a copy for STT testing/debugging UI.
                 inner.last_wav_bytes = Some(wav_bytes.clone());
+                inner.last_recording_diagnostics = Some(diagnostics);
 
                 // Check size limit
                 let max_bytes = inner.config.max_recording_bytes;
@@ -692,6 +753,65 @@ impl SharedPipeline {
                     wav_bytes.len()
                 );
                 Ok(wav_bytes)
+            }
+            Err(e) => {
+                inner.set_error(&format!("Failed to stop recording: {}", e));
+                Err(PipelineError::AudioCapture(e))
+            }
+        }
+    }
+
+    /// Stop recording and return a before/after pair of WAV bytes.
+    ///
+    /// - before: raw capture with no preprocessing/gates
+    /// - after: capture encoded with the current audio settings
+    ///
+    /// Intended for settings UI A/B testing.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn stop_recording_before_after(&self) -> Result<(Vec<u8>, Vec<u8>), PipelineError> {
+        let mut inner = self.inner.lock().map_err(|e| PipelineError::Lock(e.to_string()))?;
+
+        if !inner.state.can_stop_recording() {
+            return Err(PipelineError::NotRecording);
+        }
+
+        let after_cfg = AudioEncodeConfig {
+            noise_gate_threshold_dbfs: inner.config.noise_gate_threshold_dbfs,
+            downmix_to_mono: inner.config.audio_downmix_to_mono,
+            resample_to_16khz: inner.config.audio_resample_to_16khz,
+            highpass_enabled: inner.config.audio_highpass_enabled,
+            agc_enabled: inner.config.audio_agc_enabled,
+            noise_suppression_enabled: inner.config.audio_noise_suppression_enabled,
+            detect_speech_presence: inner.config.quiet_audio_require_speech,
+        };
+
+        match inner.audio_capture.stop_and_get_wav_before_after(after_cfg) {
+            Ok((before_wav, after_wav, diagnostics)) => {
+                // Keep a copy of the processed output for STT test + debugging.
+                inner.last_wav_bytes = Some(after_wav.clone());
+                inner.last_recording_diagnostics = Some(diagnostics);
+
+                // Check size limit (both, to avoid surprising huge payloads)
+                let max_bytes = inner.config.max_recording_bytes;
+                if max_bytes > 0 {
+                    if before_wav.len() > max_bytes {
+                        inner.set_error(&format!(
+                            "Recording too large: {} bytes",
+                            before_wav.len()
+                        ));
+                        return Err(PipelineError::RecordingTooLarge(before_wav.len(), max_bytes));
+                    }
+                    if after_wav.len() > max_bytes {
+                        inner.set_error(&format!(
+                            "Recording too large: {} bytes",
+                            after_wav.len()
+                        ));
+                        return Err(PipelineError::RecordingTooLarge(after_wav.len(), max_bytes));
+                    }
+                }
+
+                inner.reset_to_idle();
+                Ok((before_wav, after_wav))
             }
             Err(e) => {
                 inner.set_error(&format!("Failed to stop recording: {}", e));
@@ -851,10 +971,19 @@ impl SharedPipeline {
                 return Err(PipelineError::NotRecording);
             }
 
-            let noise_gate_strength = inner.config.noise_gate_strength;
-            let (wav_bytes, stats) = match inner
+            let encode_cfg = AudioEncodeConfig {
+                noise_gate_threshold_dbfs: inner.config.noise_gate_threshold_dbfs,
+                downmix_to_mono: inner.config.audio_downmix_to_mono,
+                resample_to_16khz: inner.config.audio_resample_to_16khz,
+                highpass_enabled: inner.config.audio_highpass_enabled,
+                agc_enabled: inner.config.audio_agc_enabled,
+                noise_suppression_enabled: inner.config.audio_noise_suppression_enabled,
+                detect_speech_presence: inner.config.quiet_audio_require_speech,
+            };
+
+            let (wav_bytes, diagnostics) = match inner
                 .audio_capture
-                .stop_and_get_wav_with_stats_with_noise_gate(noise_gate_strength)
+                .stop_and_get_wav_with_diagnostics(encode_cfg)
             {
                 Ok(out) => out,
                 Err(e) => {
@@ -863,8 +992,40 @@ impl SharedPipeline {
                 }
             };
 
+            let stats = diagnostics.stats;
+
+            // Persist diagnostics for UI readout.
+            inner.last_recording_diagnostics = Some(diagnostics);
+
             // Keep a copy for STT testing/debugging UI.
             inner.last_wav_bytes = Some(wav_bytes.clone());
+
+            // Optional extra hallucination protection: if VAD says "no speech", skip STT.
+            if inner.config.quiet_audio_gate_enabled
+                && inner.config.quiet_audio_require_speech
+                && inner
+                    .last_recording_diagnostics
+                    .and_then(|d| d.speech_detected)
+                    == Some(false)
+            {
+                log::info!(
+                    "Pipeline: Skipping STT because no speech was detected by offline VAD (duration {:.2}s, rms {:.1} dBFS, peak {:.1} dBFS)",
+                    stats.duration_secs,
+                    amp_to_dbfs(stats.rms),
+                    amp_to_dbfs(stats.peak)
+                );
+
+                inner.reset_to_idle();
+                return Ok(TranscriptionResult {
+                    stt_text: String::new(),
+                    final_text: String::new(),
+                    stt_duration_ms: 0,
+                    llm_duration_ms: None,
+                    llm_provider_used: None,
+                    llm_model_used: None,
+                    llm_outcome: LlmOutcome::NotAttempted,
+                });
+            }
 
             if inner.config.quiet_audio_gate_enabled
                 && is_effectively_quiet(
@@ -1516,6 +1677,14 @@ impl SharedPipeline {
     /// Get a clone of the last captured WAV bytes, if present.
     pub fn clone_last_wav_bytes(&self) -> Option<Vec<u8>> {
         self.inner.lock().ok().and_then(|inner| inner.last_wav_bytes.clone())
+    }
+
+    /// Get a copy of the last recording diagnostics (raw stats + optional speech detection).
+    pub fn last_recording_diagnostics(&self) -> Option<AudioCaptureDiagnostics> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.last_recording_diagnostics)
     }
 
     /// Poll for VAD events (non-blocking)

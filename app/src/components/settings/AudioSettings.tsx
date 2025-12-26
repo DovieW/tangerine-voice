@@ -1,11 +1,28 @@
-import { Group, NumberInput, Slider, Switch, Tooltip } from "@mantine/core";
+import {
+  Accordion,
+  Button,
+  Group,
+  NumberInput,
+  Switch,
+  Text,
+  Tooltip,
+} from "@mantine/core";
 import { useEffect, useState } from "react";
 import {
+  useAudioSettingsTestStartRecording,
+  useAudioSettingsTestStopRecording,
+  useLastRecordingDiagnostics,
   useSettings,
-  useUpdateNoiseGateStrength,
+  useUpdateAudioAgcEnabled,
+  useUpdateAudioDownmixToMono,
+  useUpdateAudioHighpassEnabled,
+  useUpdateAudioNoiseSuppressionEnabled,
+  useUpdateAudioResampleTo16khz,
+  useUpdateNoiseGateThresholdDbfs,
   useUpdateQuietAudioGateEnabled,
   useUpdateQuietAudioMinDurationSecs,
   useUpdateQuietAudioPeakDbfsThreshold,
+  useUpdateQuietAudioRequireSpeech,
   useUpdateQuietAudioRmsDbfsThreshold,
 } from "../../lib/queries";
 import { type RewriteProgramPromptProfile } from "../../lib/tauri";
@@ -20,6 +37,7 @@ export function AudioSettings({
   editingProfileId?: string;
 }) {
   const { data: settings } = useSettings();
+  const { data: lastRecordingDiagnostics } = useLastRecordingDiagnostics();
 
   const updateQuietAudioGateEnabled = useUpdateQuietAudioGateEnabled();
   const updateQuietAudioMinDurationSecs = useUpdateQuietAudioMinDurationSecs();
@@ -27,7 +45,18 @@ export function AudioSettings({
     useUpdateQuietAudioRmsDbfsThreshold();
   const updateQuietAudioPeakDbfsThreshold =
     useUpdateQuietAudioPeakDbfsThreshold();
-  const updateNoiseGateStrength = useUpdateNoiseGateStrength();
+  const updateQuietAudioRequireSpeech = useUpdateQuietAudioRequireSpeech();
+
+  const updateNoiseGateThresholdDbfs = useUpdateNoiseGateThresholdDbfs();
+  const updateAudioDownmixToMono = useUpdateAudioDownmixToMono();
+  const updateAudioResampleTo16khz = useUpdateAudioResampleTo16khz();
+  const updateAudioHighpassEnabled = useUpdateAudioHighpassEnabled();
+  const updateAudioAgcEnabled = useUpdateAudioAgcEnabled();
+  const updateAudioNoiseSuppressionEnabled =
+    useUpdateAudioNoiseSuppressionEnabled();
+
+  const audioTestStart = useAudioSettingsTestStartRecording();
+  const audioTestStop = useAudioSettingsTestStopRecording();
 
   const profiles = settings?.rewrite_program_prompt_profiles ?? [];
   const profile: RewriteProgramPromptProfile | null =
@@ -44,19 +73,77 @@ export function AudioSettings({
     settings?.quiet_audio_rms_dbfs_threshold ?? -60;
   const quietAudioPeakDbfsThreshold =
     settings?.quiet_audio_peak_dbfs_threshold ?? -50;
+  const quietAudioRequireSpeech = settings?.quiet_audio_require_speech ?? false;
 
-  const noiseGateStrengthFromSettings = settings?.noise_gate_strength ?? 0;
-  const [noiseGateStrengthDraft, setNoiseGateStrengthDraft] = useState<
-    number | null
+  const audioDownmixToMono = settings?.audio_downmix_to_mono ?? true;
+  const audioResampleTo16khz = settings?.audio_resample_to_16khz ?? false;
+  const audioHighpassEnabled = settings?.audio_highpass_enabled ?? true;
+  const audioAgcEnabled = settings?.audio_agc_enabled ?? false;
+  const audioNoiseSuppressionEnabled =
+    settings?.audio_noise_suppression_enabled ?? false;
+
+  const noiseGateThresholdDbfsFromSettings =
+    settings?.noise_gate_threshold_dbfs ?? null;
+  const [noiseGateThresholdDraft, setNoiseGateThresholdDraft] = useState<
+    number | "" | null
   >(null);
 
   useEffect(() => {
     // If settings update elsewhere (or after save), drop any draft value.
-    setNoiseGateStrengthDraft(null);
-  }, [noiseGateStrengthFromSettings]);
+    setNoiseGateThresholdDraft(null);
+  }, [noiseGateThresholdDbfsFromSettings]);
 
-  const noiseGateStrength =
-    noiseGateStrengthDraft ?? noiseGateStrengthFromSettings;
+  const noiseGateThresholdDbfs =
+    noiseGateThresholdDraft ??
+    (noiseGateThresholdDbfsFromSettings == null
+      ? ""
+      : noiseGateThresholdDbfsFromSettings);
+
+  const commitNoiseGateThresholdDbfs = () => {
+    if (noiseGateThresholdDraft == null) return;
+    const next =
+      typeof noiseGateThresholdDraft === "number"
+        ? noiseGateThresholdDraft
+        : null;
+    updateNoiseGateThresholdDbfs.mutate(next);
+    setNoiseGateThresholdDraft(null);
+  };
+
+  const lastStats = lastRecordingDiagnostics?.stats ?? null;
+  const lastSpeechDetected = lastRecordingDiagnostics?.speech_detected ?? null;
+
+  const ampToDbfs = (amp: number): number | null => {
+    if (!Number.isFinite(amp) || amp <= 0) return null;
+    return 20 * Math.log10(amp);
+  };
+
+  const formatDbfs = (dbfs: number | null): string => {
+    if (dbfs == null) return "—";
+    if (!Number.isFinite(dbfs)) return "-∞";
+    return `${dbfs.toFixed(1)}`;
+  };
+
+  const lastRmsDbfs = lastStats ? ampToDbfs(lastStats.rms) : null;
+  const lastPeakDbfs = lastStats ? ampToDbfs(lastStats.peak) : null;
+  const lastRecordingSummary = lastStats
+    ? `Last recording: ${lastStats.duration_secs.toFixed(
+        2
+      )}s · RMS ${formatDbfs(lastRmsDbfs)} dBFS · Peak ${formatDbfs(
+        lastPeakDbfs
+      )} dBFS${
+        lastSpeechDetected == null
+          ? ""
+          : ` · Speech ${lastSpeechDetected ? "yes" : "no"}`
+      }`
+    : "Last recording: —";
+
+  const peakSeemsAuto =
+    Math.abs(quietAudioPeakDbfsThreshold - (quietAudioRmsDbfsThreshold + 10)) <
+    0.75;
+
+  const [testRawSrc, setTestRawSrc] = useState<string | null>(null);
+  const [testProcessedSrc, setTestProcessedSrc] = useState<string | null>(null);
+  const [isTestRecording, setIsTestRecording] = useState(false);
 
   const content = (
     <>
@@ -64,12 +151,13 @@ export function AudioSettings({
 
       <div className="settings-row">
         <div>
-          <p className="settings-label">Hallucination protection</p>
+          <p className="settings-label">Skip quiet recordings</p>
           <p className="settings-description">
             Skip transcription when the recording is basically quiet
           </p>
+          <p className="settings-description">{lastRecordingSummary}</p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Switch
             checked={quietAudioGateEnabled}
             onChange={(event) =>
@@ -79,7 +167,276 @@ export function AudioSettings({
             color="gray"
             size="md"
           />
+          <NumberInput
+            value={quietAudioRmsDbfsThreshold}
+            onChange={(value) => {
+              const next = typeof value === "number" ? value : -60;
+              updateQuietAudioRmsDbfsThreshold.mutate(next);
+
+              // If peak looks like it's in the "auto" relationship with RMS, keep it in sync.
+              if (peakSeemsAuto) {
+                updateQuietAudioPeakDbfsThreshold.mutate(
+                  Math.min(0, next + 10)
+                );
+              }
+            }}
+            min={-120}
+            max={0}
+            step={1}
+            disabled={isProfileScope || !quietAudioGateEnabled}
+            placeholder="Sensitivity"
+            styles={{
+              input: {
+                backgroundColor: "var(--bg-elevated)",
+                borderColor: "var(--border-default)",
+                color: "var(--text-primary)",
+                width: 140,
+              },
+            }}
+          />
         </div>
+      </div>
+
+      <div style={{ marginTop: 0, marginBottom: 16 }}>
+        <Accordion variant="separated" radius="md">
+          <Accordion.Item value="audio-test">
+            <Accordion.Control>
+              <div>
+                <p className="settings-label">Test audio settings</p>
+                <p className="settings-description">
+                  Record once, then compare “before” (raw) vs “after” (with your
+                  current audio settings)
+                </p>
+              </div>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 12 }}
+              >
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <Button
+                    color="gray"
+                    disabled={
+                      isProfileScope ||
+                      audioTestStart.isPending ||
+                      audioTestStop.isPending
+                    }
+                    loading={
+                      audioTestStart.isPending || audioTestStop.isPending
+                    }
+                    onClick={() => {
+                      if (isTestRecording) {
+                        audioTestStop.mutate(undefined, {
+                          onSuccess: (res) => {
+                            setIsTestRecording(false);
+                            setTestRawSrc(
+                              `data:audio/wav;base64,${res.raw_wav_base64}`
+                            );
+                            setTestProcessedSrc(
+                              `data:audio/wav;base64,${res.processed_wav_base64}`
+                            );
+                          },
+                          onError: () => {
+                            setIsTestRecording(false);
+                          },
+                        });
+                        return;
+                      }
+
+                      setTestRawSrc(null);
+                      setTestProcessedSrc(null);
+                      audioTestStart.mutate(undefined, {
+                        onSuccess: () => setIsTestRecording(true),
+                      });
+                    }}
+                  >
+                    {isTestRecording ? "Stop" : "Record"}
+                  </Button>
+
+                  <Text size="sm" c="dimmed">
+                    {isTestRecording
+                      ? "Recording… (this is raw capture; processing happens after you stop)"
+                      : "Tip: talk normally for 3–5 seconds"}
+                  </Text>
+                </div>
+
+                <div
+                  style={{ display: "flex", flexDirection: "column", gap: 10 }}
+                >
+                  <div>
+                    <Text size="sm" fw={500}>
+                      Before
+                    </Text>
+                    <Text size="xs" c="dimmed" mb={6}>
+                      Raw capture (no filters applied)
+                    </Text>
+                    <audio
+                      controls
+                      src={testRawSrc ?? undefined}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+
+                  <div>
+                    <Text size="sm" fw={500}>
+                      After
+                    </Text>
+                    <Text size="xs" c="dimmed" mb={6}>
+                      Your current audio settings applied (noise gate, mono,
+                      HPF, AGC, etc.)
+                    </Text>
+                    <audio
+                      controls
+                      src={testProcessedSrc ?? undefined}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Noise gate threshold (experimental)</p>
+          <p className="settings-description">
+            Set how quiet audio must be to be suppressed. Blank = Off.
+          </p>
+        </div>
+        <Group gap={8} align="center">
+          <NumberInput
+            value={noiseGateThresholdDbfs}
+            onChange={setNoiseGateThresholdDraft}
+            onBlur={commitNoiseGateThresholdDbfs}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitNoiseGateThresholdDbfs();
+            }}
+            min={-75}
+            max={-30}
+            step={1}
+            placeholder="Off"
+            styles={{
+              input: {
+                backgroundColor: "var(--bg-elevated)",
+                borderColor: "var(--border-default)",
+                color: "var(--text-primary)",
+                width: 140,
+              },
+            }}
+          />
+        </Group>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Convert to mono</p>
+          <p className="settings-description">
+            Downmix stereo/multi-channel inputs for more reliable VAD and STT
+          </p>
+        </div>
+        <Switch
+          checked={audioDownmixToMono}
+          onChange={(event) =>
+            updateAudioDownmixToMono.mutate(event.currentTarget.checked)
+          }
+          disabled={isProfileScope}
+          color="gray"
+          size="md"
+        />
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">High-pass filter</p>
+          <p className="settings-description">
+            Removes DC/rumble to help voice clarity (very lightweight)
+          </p>
+        </div>
+        <Switch
+          checked={audioHighpassEnabled}
+          onChange={(event) =>
+            updateAudioHighpassEnabled.mutate(event.currentTarget.checked)
+          }
+          disabled={isProfileScope}
+          color="gray"
+          size="md"
+        />
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Auto gain (AGC)</p>
+          <p className="settings-description">
+            Normalizes volume so quiet voices are easier to transcribe
+          </p>
+        </div>
+        <Switch
+          checked={audioAgcEnabled}
+          onChange={(event) =>
+            updateAudioAgcEnabled.mutate(event.currentTarget.checked)
+          }
+          disabled={isProfileScope}
+          color="gray"
+          size="md"
+        />
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Noise suppression (light)</p>
+          <p className="settings-description">
+            Reduces steady background noise (best-effort, stop-time)
+          </p>
+        </div>
+        <Switch
+          checked={audioNoiseSuppressionEnabled}
+          onChange={(event) =>
+            updateAudioNoiseSuppressionEnabled.mutate(
+              event.currentTarget.checked
+            )
+          }
+          disabled={isProfileScope}
+          color="gray"
+          size="md"
+        />
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Resample to 16 kHz</p>
+          <p className="settings-description">
+            Helpful for some STT engines; costs a bit of CPU at stop time
+          </p>
+        </div>
+        <Switch
+          checked={audioResampleTo16khz}
+          onChange={(event) =>
+            updateAudioResampleTo16khz.mutate(event.currentTarget.checked)
+          }
+          disabled={isProfileScope}
+          color="gray"
+          size="md"
+        />
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <p className="settings-label">Require speech</p>
+          <p className="settings-description">
+            Extra skip: don't transcribe if VAD finds no speech
+          </p>
+        </div>
+        <Switch
+          checked={quietAudioRequireSpeech}
+          onChange={(event) =>
+            updateQuietAudioRequireSpeech.mutate(event.currentTarget.checked)
+          }
+          disabled={isProfileScope || !quietAudioGateEnabled}
+          color="gray"
+          size="md"
+        />
       </div>
 
       <div className="settings-row">
@@ -100,36 +457,6 @@ export function AudioSettings({
             max={5}
             step={0.05}
             decimalScale={2}
-            disabled={isProfileScope || !quietAudioGateEnabled}
-            styles={{
-              input: {
-                backgroundColor: "var(--bg-elevated)",
-                borderColor: "var(--border-default)",
-                color: "var(--text-primary)",
-                width: 140,
-              },
-            }}
-          />
-        </Group>
-      </div>
-
-      <div className="settings-row">
-        <div>
-          <p className="settings-label">Quiet RMS threshold</p>
-          <p className="settings-description">
-            Average level below this is considered quiet (dBFS)
-          </p>
-        </div>
-        <Group gap={8} align="center">
-          <NumberInput
-            value={quietAudioRmsDbfsThreshold}
-            onChange={(value) => {
-              const next = typeof value === "number" ? value : -50;
-              updateQuietAudioRmsDbfsThreshold.mutate(next);
-            }}
-            min={-120}
-            max={0}
-            step={1}
             disabled={isProfileScope || !quietAudioGateEnabled}
             styles={{
               input: {
@@ -171,30 +498,6 @@ export function AudioSettings({
             }}
           />
         </Group>
-      </div>
-
-      <div className="settings-row">
-        <div>
-          <p className="settings-label">Noise gate (experimental)</p>
-          <p className="settings-description">
-            Reduce background noise in recordings. 0 = Off.
-          </p>
-        </div>
-        <div style={{ width: 220 }}>
-          <Slider
-            value={noiseGateStrength}
-            onChange={setNoiseGateStrengthDraft}
-            onChangeEnd={(value) => updateNoiseGateStrength.mutate(value)}
-            min={0}
-            max={100}
-            step={1}
-            label={(value) => (value === 0 ? "Off" : String(value))}
-            color="gray"
-            styles={{
-              track: { backgroundColor: "var(--bg-elevated)" },
-            }}
-          />
-        </div>
       </div>
     </>
   );

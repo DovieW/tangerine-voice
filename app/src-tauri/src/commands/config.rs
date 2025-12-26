@@ -174,6 +174,7 @@ const STT_PROVIDERS: &[(&str, &str, bool)] = &[
 /// LLM provider definitions
 const LLM_PROVIDERS: &[(&str, &str, bool)] = &[
     ("openai", "OpenAI", false),
+    ("gemini", "Google AI Studio", false),
     ("anthropic", "Anthropic", false),
     ("groq", "Groq", false),
     ("ollama", "Ollama", true),
@@ -339,6 +340,30 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         .and_then(|store| store.get("llm_model"))
         .and_then(|v| serde_json::from_value(v).ok());
 
+    // Optional provider-specific reasoning/thinking knobs.
+    // These are ignored unless the selected provider/model supports them.
+    let openai_reasoning_effort: Option<String> = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("openai_reasoning_effort"))
+        .and_then(|v| serde_json::from_value(v).ok());
+    let gemini_thinking_budget: Option<i64> = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("gemini_thinking_budget"))
+        .and_then(|v| serde_json::from_value(v).ok());
+    let gemini_thinking_level: Option<String> = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("gemini_thinking_level"))
+        .and_then(|v| serde_json::from_value(v).ok());
+
+    let anthropic_thinking_budget: Option<i64> = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("anthropic_thinking_budget"))
+        .and_then(|v| serde_json::from_value(v).ok());
+
     // If the user never explicitly selected a model, treat "default" as the provider's
     // concrete default model so request logs can display the exact model used.
     let llm_provider_effective = llm_provider_setting
@@ -372,7 +397,7 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
     // Read all available LLM API keys (for per-profile provider overrides at runtime)
     let mut llm_api_keys: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    for provider in ["openai", "anthropic", "groq"] {
+    for provider in ["openai", "anthropic", "groq", "gemini"] {
         let key_name = format!("{}_api_key", provider);
         let key: String = app
             .store("settings.json")
@@ -476,14 +501,70 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or(default_pipeline_config.quiet_audio_peak_dbfs_threshold);
 
-    // Read experimental noise gate settings from store
-    let noise_gate_strength_raw: u64 = app
+    // Read experimental noise gate settings from store.
+    // New: `noise_gate_threshold_dbfs` (Option<f32>), with legacy fallback to
+    // `noise_gate_strength` (0..=100 mapped to -75..-30 dBFS).
+    let noise_gate_threshold_dbfs: Option<f32> = app
         .store("settings.json")
         .ok()
-        .and_then(|store| store.get("noise_gate_strength"))
+        .and_then(|store| store.get("noise_gate_threshold_dbfs"))
         .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or(0);
-    let noise_gate_strength: u8 = noise_gate_strength_raw.min(100) as u8;
+        .and_then(|v: f32| if v.is_finite() { Some(v.clamp(-75.0, -30.0)) } else { None })
+        .or_else(|| {
+            let strength_raw: u64 = app
+                .store("settings.json")
+                .ok()
+                .and_then(|store| store.get("noise_gate_strength"))
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(0);
+            let s = (strength_raw.min(100) as u8) as f32;
+            if s <= 0.0 {
+                None
+            } else {
+                let t = s / 100.0;
+                Some((-75.0 + (-30.0 + 75.0) * t).clamp(-75.0, -30.0))
+            }
+        });
+
+    // Voice pickup preprocessing toggles
+    let audio_downmix_to_mono: bool = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("audio_downmix_to_mono"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default_pipeline_config.audio_downmix_to_mono);
+    let audio_resample_to_16khz: bool = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("audio_resample_to_16khz"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default_pipeline_config.audio_resample_to_16khz);
+    let audio_highpass_enabled: bool = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("audio_highpass_enabled"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default_pipeline_config.audio_highpass_enabled);
+    let audio_agc_enabled: bool = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("audio_agc_enabled"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default_pipeline_config.audio_agc_enabled);
+    let audio_noise_suppression_enabled: bool = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("audio_noise_suppression_enabled"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default_pipeline_config.audio_noise_suppression_enabled);
+
+    // Extra hallucination protection
+    let quiet_audio_require_speech: bool = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("quiet_audio_require_speech"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(default_pipeline_config.quiet_audio_require_speech);
 
     let config = PipelineConfig {
         input_device_name,
@@ -503,13 +584,25 @@ pub fn sync_pipeline_config(app: AppHandle) -> Result<(), String> {
         quiet_audio_rms_dbfs_threshold,
         quiet_audio_peak_dbfs_threshold,
 
-        noise_gate_strength,
+        noise_gate_threshold_dbfs,
+
+        audio_downmix_to_mono,
+        audio_resample_to_16khz,
+        audio_highpass_enabled,
+        audio_agc_enabled,
+        audio_noise_suppression_enabled,
+
+        quiet_audio_require_speech,
 
         llm_config: crate::llm::LlmConfig {
             enabled: llm_enabled,
             provider: llm_provider_effective,
             api_key: llm_api_key,
             model: llm_model_effective.clone(),
+            openai_reasoning_effort,
+            gemini_thinking_budget,
+            gemini_thinking_level,
+            anthropic_thinking_budget,
             prompts: base_prompts,
             program_prompt_profiles,
             ..Default::default()

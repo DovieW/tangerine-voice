@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
   type AppSettings,
+  audioSettingsTestAPI,
   type CleanupPromptSections,
   configAPI,
   type HotkeyConfig,
@@ -347,6 +348,120 @@ export function useUpdateNoiseGateStrength() {
   });
 }
 
+export function useUpdateNoiseGateThresholdDbfs() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (thresholdDbfs: number | null) => {
+      await tauriAPI.updateNoiseGateThresholdDbfs(thresholdDbfs);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateQuietAudioRequireSpeech() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await tauriAPI.updateQuietAudioRequireSpeech(enabled);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateAudioDownmixToMono() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await tauriAPI.updateAudioDownmixToMono(enabled);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateAudioResampleTo16khz() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await tauriAPI.updateAudioResampleTo16khz(enabled);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateAudioHighpassEnabled() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await tauriAPI.updateAudioHighpassEnabled(enabled);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateAudioAgcEnabled() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await tauriAPI.updateAudioAgcEnabled(enabled);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateAudioNoiseSuppressionEnabled() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await tauriAPI.updateAudioNoiseSuppressionEnabled(enabled);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useLastRecordingDiagnostics() {
+  return useQuery({
+    queryKey: ["lastRecordingDiagnostics"],
+    queryFn: () => sttAPI.getLastRecordingDiagnostics(),
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    // Keep UI in sync if user records via hotkey while settings is open.
+    refetchInterval: 2000,
+  });
+}
+
+export function useAudioSettingsTestStartRecording() {
+  return useMutation({
+    mutationFn: () => audioSettingsTestAPI.startRecording(),
+  });
+}
+
+export function useAudioSettingsTestStopRecording() {
+  return useMutation({
+    mutationFn: () => audioSettingsTestAPI.stopRecording(),
+  });
+}
+
 export function useUpdateMaxSavedRecordings() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -651,6 +766,58 @@ export function useUpdateLLMModel() {
     mutationFn: async (model: string | null) => {
       await tauriAPI.updateLLMModel(model);
       // Sync the pipeline configuration when LLM model changes
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateOpenAiReasoningEffort() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (effort: "low" | "medium" | "high" | null) => {
+      await tauriAPI.updateOpenAiReasoningEffort(effort);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateAnthropicThinkingBudget() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (budget: number | null) => {
+      await tauriAPI.updateAnthropicThinkingBudget(budget);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateGeminiThinkingBudget() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (budget: number | null) => {
+      await tauriAPI.updateGeminiThinkingBudget(budget);
+      await configAPI.syncPipelineConfig();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useUpdateGeminiThinkingLevel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (level: "minimal" | "low" | "medium" | "high" | null) => {
+      await tauriAPI.updateGeminiThinkingLevel(level);
       await configAPI.syncPipelineConfig();
     },
     onSuccess: () => {

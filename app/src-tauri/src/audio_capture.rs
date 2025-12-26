@@ -9,6 +9,7 @@ use crate::vad::{VadConfig, VadEvent, VadFrameProcessor};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use hound::{WavSpec, WavWriter};
+use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -28,11 +29,123 @@ fn db_to_amp(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
 
+fn amp_to_dbfs(amp: f32) -> f32 {
+    if !amp.is_finite() || amp <= 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * amp.log10()
+    }
+}
+
+fn downmix_interleaved_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
+    let channels = channels.max(1);
+    if channels == 1 {
+        return samples.to_vec();
+    }
+
+    let frames = samples.len() / channels;
+    let mut mono = Vec::with_capacity(frames);
+    for frame_idx in 0..frames {
+        let base = frame_idx * channels;
+        let mut sum = 0.0_f32;
+        for c in 0..channels {
+            sum += samples[base + c];
+        }
+        mono.push(sum / channels as f32);
+    }
+    mono
+}
+
+fn downmix_interleaved_chunk_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
+    // Same as full downmix, but kept separate for clarity.
+    downmix_interleaved_to_mono(samples, channels)
+}
+
+fn apply_highpass_dc_block(samples: &mut [f32], sample_rate: u32) {
+    // Simple DC-blocking high-pass filter.
+    // Good enough to reduce rumble / DC offset without heavy DSP.
+    let sr = sample_rate.max(1) as f32;
+    // Choose r based on a rough cutoff. Keep stable across SR.
+    // r close to 1.0 => lower cutoff.
+    let cutoff_hz = 80.0_f32;
+    let r = (-2.0 * std::f32::consts::PI * cutoff_hz / sr).exp();
+    let mut y_prev = 0.0_f32;
+    let mut x_prev = 0.0_f32;
+    for x in samples.iter_mut() {
+        let y = *x - x_prev + r * y_prev;
+        x_prev = *x;
+        y_prev = y;
+        *x = y;
+    }
+}
+
+fn apply_agc(samples: &mut [f32]) {
+    // Lightweight gain normalization.
+    // Target a strong peak while capping max gain to avoid crazy amplification.
+    let mut peak = 0.0_f32;
+    let mut sum_sq = 0.0_f64;
+    for &s in samples.iter() {
+        peak = peak.max(s.abs());
+        sum_sq += (s as f64) * (s as f64);
+    }
+    if samples.is_empty() {
+        return;
+    }
+    let rms = (sum_sq / samples.len() as f64).sqrt() as f32;
+
+    // Avoid amplifying true silence.
+    if peak < 1e-6 && rms < 1e-6 {
+        return;
+    }
+
+    let target_peak = 0.90_f32;
+    let target_rms = 0.10_f32; // ~ -20 dBFS
+    let max_gain = 8.0_f32;
+
+    let gain_peak = if peak > 0.0 { target_peak / peak } else { 1.0 };
+    let gain_rms = if rms > 0.0 { target_rms / rms } else { 1.0 };
+    let gain = gain_peak.min(gain_rms).clamp(0.1, max_gain);
+
+    for s in samples.iter_mut() {
+        *s = (*s * gain).clamp(-1.0, 1.0);
+    }
+}
+
+fn apply_light_noise_suppression(samples: &mut [f32], sample_rate: u32) {
+    // Extremely lightweight noise suppression:
+    // estimate a noise floor from the first ~200ms and apply soft subtraction.
+    if samples.is_empty() {
+        return;
+    }
+
+    let sr = sample_rate.max(1) as usize;
+    let window = (sr as f32 * 0.20) as usize; // ~200ms
+    let n = window.clamp(1, samples.len());
+
+    let mut sum_sq = 0.0_f64;
+    for &s in samples.iter().take(n) {
+        sum_sq += (s as f64) * (s as f64);
+    }
+    let floor_rms = (sum_sq / n as f64).sqrt() as f32;
+    if !floor_rms.is_finite() || floor_rms <= 0.0 {
+        return;
+    }
+
+    // Subtract most of the estimated floor; keep some to avoid pumping.
+    let subtract = floor_rms * 0.8;
+    for s in samples.iter_mut() {
+        let a = s.abs();
+        let sign = if *s >= 0.0 { 1.0 } else { -1.0 };
+        let out = (a - subtract).max(0.0);
+        *s = (sign * out).clamp(-1.0, 1.0);
+    }
+}
+
 /// Apply a simple noise gate to interleaved samples.
 ///
 /// - `samples` are interleaved f32 in [-1, 1]
 /// - `channels` is the interleaving width
-/// - `strength` is 0..=100 (0 => bypass)
+/// - `threshold_dbfs` is a negative dBFS value (e.g. -60). `None` => bypass.
 ///
 /// This is intentionally lightweight and runs at stop-time (offline), not in the
 /// real-time capture callback.
@@ -40,20 +153,25 @@ fn apply_noise_gate_interleaved(
     samples: &[f32],
     sample_rate: u32,
     channels: u16,
-    strength: u8,
+    threshold_dbfs: Option<f32>,
 ) -> Vec<f32> {
-    let strength = clamp_u8_0_100(strength);
-    if strength == 0 || samples.is_empty() {
+    let Some(threshold_dbfs) = threshold_dbfs else {
+        return samples.to_vec();
+    };
+    if samples.is_empty() {
         return samples.to_vec();
     }
+
+    // UI-range clamp. Keep conservative.
+    let threshold_dbfs = if threshold_dbfs.is_finite() {
+        threshold_dbfs.clamp(-75.0, -30.0)
+    } else {
+        -60.0
+    };
 
     let channels_usize = channels.max(1) as usize;
     let frames = samples.len() / channels_usize;
 
-    // Map 0..100 -> threshold dBFS range. Higher threshold => more aggressive gating.
-    // Tuned to be conservative at low strengths.
-    let t = strength as f32 / 100.0;
-    let threshold_dbfs = lerp(-75.0, -30.0, t);
     let threshold_amp = db_to_amp(threshold_dbfs);
 
     // Hysteresis reduces "chattering" around the threshold.
@@ -105,6 +223,44 @@ fn apply_noise_gate_interleaved(
     }
 
     out
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AudioEncodeConfig {
+    /// If set, apply a noise gate with the given threshold.
+    pub noise_gate_threshold_dbfs: Option<f32>,
+    /// Convert the captured audio to mono before WAV encoding.
+    pub downmix_to_mono: bool,
+    /// Resample to 16kHz before WAV encoding.
+    pub resample_to_16khz: bool,
+    /// Apply a lightweight high-pass (DC/rumble) filter.
+    pub highpass_enabled: bool,
+    /// Apply a lightweight gain normalization.
+    pub agc_enabled: bool,
+    /// Apply a lightweight noise suppression.
+    pub noise_suppression_enabled: bool,
+    /// If enabled, compute a best-effort speech presence boolean using WebRTC VAD.
+    pub detect_speech_presence: bool,
+}
+
+impl Default for AudioEncodeConfig {
+    fn default() -> Self {
+        Self {
+            noise_gate_threshold_dbfs: None,
+            downmix_to_mono: true,
+            resample_to_16khz: false,
+            highpass_enabled: true,
+            agc_enabled: false,
+            noise_suppression_enabled: false,
+            detect_speech_presence: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct AudioCaptureDiagnostics {
+    pub stats: AudioLevelStats,
+    pub speech_detected: Option<bool>,
 }
 
 /// Errors that can occur during audio capture
@@ -236,16 +392,82 @@ impl AudioBuffer {
         &self,
         noise_gate_strength: u8,
     ) -> Result<Vec<u8>, AudioCaptureError> {
-        let processed = apply_noise_gate_interleaved(
-            &self.samples,
-            self.sample_rate,
-            self.channels,
-            noise_gate_strength,
-        );
+        let strength = clamp_u8_0_100(noise_gate_strength);
+        let threshold_dbfs = if strength == 0 {
+            None
+        } else {
+            let t = strength as f32 / 100.0;
+            Some(lerp(-75.0, -30.0, t))
+        };
+
+        let (wav_bytes, _diagnostics) = self.to_wav_bytes_with_config(AudioEncodeConfig {
+            noise_gate_threshold_dbfs: threshold_dbfs,
+            ..Default::default()
+        })?;
+        Ok(wav_bytes)
+    }
+
+    pub fn to_wav_bytes_with_config(
+        &self,
+        cfg: AudioEncodeConfig,
+    ) -> Result<(Vec<u8>, AudioCaptureDiagnostics), AudioCaptureError> {
+        let diagnostics = if cfg.detect_speech_presence {
+            Some(detect_speech_presence(
+                &self.samples,
+                self.sample_rate,
+                self.channels,
+            ))
+        } else {
+            None
+        };
+
+        let mut processed_samples = if cfg.downmix_to_mono {
+            downmix_interleaved_to_mono(&self.samples, self.channels as usize)
+        } else {
+            self.samples.to_vec()
+        };
+
+        let mut out_sample_rate = self.sample_rate;
+        let out_channels: u16 = if cfg.downmix_to_mono { 1 } else { self.channels.max(1) };
+
+        // If we didn't downmix, most processing is skipped (keeps code simple and predictable).
+        if cfg.downmix_to_mono {
+            if cfg.noise_suppression_enabled {
+                apply_light_noise_suppression(&mut processed_samples, out_sample_rate);
+            }
+            if cfg.highpass_enabled {
+                apply_highpass_dc_block(&mut processed_samples, out_sample_rate);
+            }
+            if cfg.agc_enabled {
+                apply_agc(&mut processed_samples);
+            }
+
+            // Optional resample after filtering/gain.
+            if cfg.resample_to_16khz && out_sample_rate != 16000 {
+                processed_samples = crate::vad::resample_to_16khz(&processed_samples, out_sample_rate);
+                out_sample_rate = 16000;
+            }
+
+            // Noise gate (mono)
+            processed_samples = apply_noise_gate_interleaved(
+                &processed_samples,
+                out_sample_rate,
+                1,
+                cfg.noise_gate_threshold_dbfs,
+            );
+        } else {
+            // Noise gate (interleaved)
+            processed_samples = apply_noise_gate_interleaved(
+                &processed_samples,
+                out_sample_rate,
+                out_channels,
+                cfg.noise_gate_threshold_dbfs,
+            );
+        }
 
         let spec = WavSpec {
-            channels: self.channels,
-            sample_rate: self.sample_rate,
+            channels: out_channels,
+            sample_rate: out_sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
@@ -255,8 +477,7 @@ impl AudioBuffer {
             let mut writer = WavWriter::new(&mut cursor, spec)
                 .map_err(|e| AudioCaptureError::Encoding(e.to_string()))?;
 
-            for &sample in &processed {
-                // Convert f32 [-1.0, 1.0] to i16
+            for &sample in &processed_samples {
                 let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                 writer
                     .write_sample(sample_i16)
@@ -268,7 +489,13 @@ impl AudioBuffer {
                 .map_err(|e| AudioCaptureError::Encoding(e.to_string()))?;
         }
 
-        Ok(cursor.into_inner())
+        Ok((
+            cursor.into_inner(),
+            AudioCaptureDiagnostics {
+                stats: self.level_stats(),
+                speech_detected: diagnostics,
+            },
+        ))
     }
 
     /// Get the sample rate
@@ -285,13 +512,29 @@ impl AudioBuffer {
 }
 
 /// Basic audio level metrics for gating/diagnostics.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AudioLevelStats {
     pub duration_secs: f32,
     /// Root-mean-square amplitude in [0, 1].
     pub rms: f32,
     /// Peak (max absolute) amplitude in [0, 1].
     pub peak: f32,
+}
+
+fn detect_speech_presence(samples: &[f32], sample_rate: u32, channels: u16) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+
+    let mono = downmix_interleaved_to_mono(samples, channels.max(1) as usize);
+    let mut processor = VadFrameProcessor::new(VadConfig::default(), sample_rate.max(1));
+
+    for event in processor.process(&mono) {
+        if matches!(event, VadEvent::SpeechStart { .. }) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Realtime-safe snapshot of the most recent input level.
@@ -696,7 +939,7 @@ impl AudioCapture {
         &mut self,
         noise_gate_strength: u8,
     ) -> Result<Vec<u8>, AudioCaptureError> {
-        let (wav_bytes, _stats) = self.stop_and_get_wav_with_stats_with_noise_gate(noise_gate_strength)?;
+        let (wav_bytes, _diag) = self.stop_and_get_wav_with_stats_with_noise_gate(noise_gate_strength)?;
         Ok(wav_bytes)
     }
 
@@ -723,7 +966,18 @@ impl AudioCapture {
             .map_err(|_| AudioCaptureError::Encoding("Failed to lock buffer".to_string()))?;
 
         let stats = buffer.level_stats();
-        let wav_bytes = buffer.to_wav_bytes_with_noise_gate(noise_gate_strength)?;
+        let (wav_bytes, _diag) = buffer.to_wav_bytes_with_config(AudioEncodeConfig {
+            noise_gate_threshold_dbfs: {
+                let strength = clamp_u8_0_100(noise_gate_strength);
+                if strength == 0 {
+                    None
+                } else {
+                    let t = strength as f32 / 100.0;
+                    Some(lerp(-75.0, -30.0, t))
+                }
+            },
+            ..Default::default()
+        })?;
 
         log::info!(
             "Audio capture stopped, {} bytes captured (duration {:.2}s, rms {:.6}, peak {:.6})",
@@ -734,6 +988,54 @@ impl AudioCapture {
         );
 
         Ok((wav_bytes, stats))
+    }
+
+    /// Stop recording and return WAV bytes + diagnostics, applying preprocessing.
+    pub fn stop_and_get_wav_with_diagnostics(
+        &mut self,
+        cfg: AudioEncodeConfig,
+    ) -> Result<(Vec<u8>, AudioCaptureDiagnostics), AudioCaptureError> {
+        self.stop();
+
+        let buffer = self
+            .buffer
+            .lock()
+            .map_err(|_| AudioCaptureError::Encoding("Failed to lock buffer".to_string()))?;
+
+        buffer.to_wav_bytes_with_config(cfg)
+    }
+
+    /// Stop recording and return two WAV encodes of the same captured audio:
+    /// - "before": raw, with no preprocessing/gates
+    /// - "after": encoded with the provided config
+    ///
+    /// This is intended for UI A/B testing of audio settings.
+    pub fn stop_and_get_wav_before_after(
+        &mut self,
+        after_cfg: AudioEncodeConfig,
+    ) -> Result<(Vec<u8>, Vec<u8>, AudioCaptureDiagnostics), AudioCaptureError> {
+        self.stop();
+
+        let buffer = self
+            .buffer
+            .lock()
+            .map_err(|_| AudioCaptureError::Encoding("Failed to lock buffer".to_string()))?;
+
+        // "Before": as-captured (no downmix/resample/filters/gates).
+        let (before_wav, _before_diag) = buffer.to_wav_bytes_with_config(AudioEncodeConfig {
+            noise_gate_threshold_dbfs: None,
+            downmix_to_mono: false,
+            resample_to_16khz: false,
+            highpass_enabled: false,
+            agc_enabled: false,
+            noise_suppression_enabled: false,
+            detect_speech_presence: false,
+        })?;
+
+        // "After": apply current user settings.
+        let (after_wav, after_diag) = buffer.to_wav_bytes_with_config(after_cfg)?;
+
+        Ok((before_wav, after_wav, after_diag))
     }
 
     /// Stop recording without returning audio data
@@ -893,7 +1195,12 @@ fn run_capture_thread(
 
                     // Send samples to VAD thread if enabled
                     if let Some(ref tx) = vad_tx {
-                        let _ = tx.send(data.to_vec());
+                        let mono = if channels > 1 {
+                            downmix_interleaved_chunk_to_mono(data, channels)
+                        } else {
+                            data.to_vec()
+                        };
+                        let _ = tx.send(mono);
                     }
                 },
                 err_fn,
@@ -937,7 +1244,12 @@ fn run_capture_thread(
 
                     // Send samples to VAD thread if enabled
                     if let Some(ref tx) = vad_tx {
-                        let _ = tx.send(samples);
+                        let mono = if channels > 1 {
+                            downmix_interleaved_chunk_to_mono(&samples, channels)
+                        } else {
+                            samples
+                        };
+                        let _ = tx.send(mono);
                     }
                 },
                 err_fn,
@@ -981,7 +1293,12 @@ fn run_capture_thread(
 
                     // Send samples to VAD thread if enabled
                     if let Some(ref tx) = vad_tx {
-                        let _ = tx.send(samples);
+                        let mono = if channels > 1 {
+                            downmix_interleaved_chunk_to_mono(&samples, channels)
+                        } else {
+                            samples
+                        };
+                        let _ = tx.send(mono);
                     }
                 },
                 err_fn,

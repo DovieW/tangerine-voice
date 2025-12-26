@@ -3,12 +3,13 @@
 //! These commands expose the recording pipeline functionality to the frontend,
 //! enabling voice dictation directly from the Tauri app.
 
-use crate::audio_capture::VadAutoStopConfig;
+use crate::audio_capture::{AudioCaptureDiagnostics, VadAutoStopConfig};
 use crate::pipeline::{LlmOutcome, PipelineConfig, PipelineError, PipelineState, SharedPipeline};
 use crate::recordings::{RecordingStore, RecordingsStats};
 use crate::request_log::RequestLogStore;
 use crate::history::{HistoryStorage, RequestModelInfo};
 use chrono::{Duration as ChronoDuration, Utc};
+use serde::Serialize;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -1026,6 +1027,48 @@ pub async fn pipeline_test_transcribe_last_audio(
 #[tauri::command]
 pub fn pipeline_has_last_audio(pipeline: State<'_, SharedPipeline>) -> Result<bool, CommandError> {
     Ok(pipeline.has_last_audio())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioSettingsTestWavs {
+    pub raw_wav_base64: String,
+    pub processed_wav_base64: String,
+}
+
+/// Start a recording intended for audio settings A/B testing.
+///
+/// This records raw audio (no filters applied during capture). The stop command will
+/// return both the raw encode and the processed encode using current settings.
+#[tauri::command]
+pub fn pipeline_test_audio_settings_start_recording(
+    pipeline: State<'_, SharedPipeline>,
+) -> Result<(), CommandError> {
+    pipeline.start_recording().map_err(CommandError::from)
+}
+
+/// Stop the audio settings A/B test recording and return before/after audio.
+#[tauri::command]
+pub fn pipeline_test_audio_settings_stop_recording(
+    pipeline: State<'_, SharedPipeline>,
+) -> Result<AudioSettingsTestWavs, CommandError> {
+    use base64::Engine;
+
+    let (raw_wav, processed_wav) = pipeline
+        .stop_recording_before_after()
+        .map_err(CommandError::from)?;
+
+    Ok(AudioSettingsTestWavs {
+        raw_wav_base64: base64::engine::general_purpose::STANDARD.encode(raw_wav),
+        processed_wav_base64: base64::engine::general_purpose::STANDARD.encode(processed_wav),
+    })
+}
+
+/// Get a copy of the most recent recording diagnostics (duration/RMS/peak + optional speech flag).
+#[tauri::command]
+pub fn pipeline_get_last_recording_diagnostics(
+    pipeline: State<'_, SharedPipeline>,
+) -> Result<Option<AudioCaptureDiagnostics>, CommandError> {
+    Ok(pipeline.last_recording_diagnostics())
 }
 
 /// Full pipeline helper: Start recording if not recording, or stop and transcribe if recording

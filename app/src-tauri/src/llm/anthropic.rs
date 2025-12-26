@@ -16,6 +16,7 @@ pub struct AnthropicLlmProvider {
     api_key: String,
     model: String,
     timeout: Option<Duration>,
+    thinking_budget_tokens: Option<i64>,
 }
 
 impl AnthropicLlmProvider {
@@ -26,6 +27,7 @@ impl AnthropicLlmProvider {
             api_key,
             model: DEFAULT_MODEL.to_string(),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            thinking_budget_tokens: None,
         }
     }
 
@@ -36,6 +38,7 @@ impl AnthropicLlmProvider {
             api_key,
             model,
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            thinking_budget_tokens: None,
         }
     }
 
@@ -47,6 +50,7 @@ impl AnthropicLlmProvider {
             api_key,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            thinking_budget_tokens: None,
         }
     }
 
@@ -62,6 +66,63 @@ impl AnthropicLlmProvider {
     pub fn without_timeout(mut self) -> Self {
         self.timeout = None;
         self
+    }
+
+    pub fn with_thinking_budget(mut self, budget_tokens: Option<i64>) -> Self {
+        self.thinking_budget_tokens = budget_tokens;
+        self
+    }
+
+    fn supports_extended_thinking(model: &str) -> bool {
+        let m = model.to_ascii_lowercase();
+
+        // Extended thinking is supported by newer Claude families. Be conservative:
+        // - Claude 3.7 (explicit)
+        // - Claude 4.x / 4.5 families
+        //
+        // (We avoid enabling for older 3.0/3.5 models unless explicitly named.)
+        m.contains("claude-3-7")
+            || m.contains("claude-4")
+            || m.contains("-4-")
+            || m.contains("-4.0")
+            || m.contains("-4-5")
+    }
+
+    fn effective_thinking(&self) -> Option<ThinkingParam> {
+        let budget = self.thinking_budget_tokens?;
+
+        if !Self::supports_extended_thinking(&self.model) {
+            log::warn!(
+                "Unsupported Anthropic extended thinking for model '{}' (budget_tokens={}); ignoring",
+                self.model,
+                budget
+            );
+            return None;
+        }
+
+        // Anthropic cookbook (extended thinking) notes a minimum budget of 1024.
+        if budget < 1024 {
+            log::warn!(
+                "Anthropic thinking budget too small ({}); minimum is 1024. Ignoring.",
+                budget
+            );
+            return None;
+        }
+
+        // Defensive cap to avoid obviously unreasonable values. Actual max may vary by model.
+        if budget > 32768 {
+            log::warn!(
+                "Anthropic thinking budget too large ({}); capping at 32768.",
+                budget
+            );
+        }
+
+        let capped: i64 = budget.min(32768);
+
+        Some(ThinkingParam {
+            thinking_type: "enabled".to_string(),
+            budget_tokens: capped as u32,
+        })
     }
 }
 
@@ -84,6 +145,17 @@ struct MessagesRequest {
     max_tokens: u32,
     system: String,
     messages: Vec<Message>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingParam>,
+}
+
+#[derive(Debug, Serialize)]
+struct ThinkingParam {
+    #[serde(rename = "type")]
+    thinking_type: String,
+    #[serde(rename = "budget_tokens")]
+    budget_tokens: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +198,7 @@ impl LlmProvider for AnthropicLlmProvider {
                     text: user_message.to_string(),
                 }],
             }],
+            thinking: self.effective_thinking(),
         };
 
         let mut req = self

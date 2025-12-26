@@ -37,12 +37,29 @@ export const LLM_MODELS: Record<string, ModelOption[]> = {
     { value: "openai/gpt-oss-20b", label: "GPT-OSS 20B" },
   ],
   openai: [
+    { value: "gpt-5.2", label: "GPT-5.2" },
+    { value: "gpt-5.1", label: "GPT-5.1" },
+    { value: "gpt-5", label: "GPT-5" },
+    { value: "gpt-5-mini", label: "GPT-5 Mini" },
+    { value: "gpt-5-nano", label: "GPT-5 Nano" },
     { value: "gpt-4.1", label: "GPT-4.1" },
     { value: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
     { value: "gpt-4.1-nano", label: "GPT-4.1 Nano" },
     // { value: "gpt-4o-mini", label: "GPT-4o Mini" },
     // { value: "gpt-4o", label: "GPT-4o" },
     // { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
+  ],
+  gemini: [
+    // Gemini 3 (preview) - requested as explicit `models/...` IDs.
+    { value: "models/gemini-3-pro-preview", label: "Gemini 3 Pro (Preview)" },
+    { value: "models/gemini-3-flash-preview", label: "Gemini 3 Flash (Preview)" },
+
+    // Gemini 2.5 (stable)
+    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    // Dovie requested "2.5 Flash Pro" and "2.5 Flash Mini"; closest stable IDs:
+    // - Flash (thinking-capable) and Flash-Lite (smallest)
+    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+    { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },
   ],
   anthropic: [
     { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },

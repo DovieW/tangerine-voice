@@ -1,4 +1,4 @@
-import { Anchor, Button, PasswordInput, Tooltip } from "@mantine/core";
+import { ActionIcon, Button, PasswordInput, Tooltip } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link as LinkIcon } from "lucide-react";
@@ -22,6 +22,13 @@ const API_KEYS: ApiKeyConfig[] = [
     placeholder: "Enter API key",
     storeKey: "groq_api_key",
     getKeyUrl: "https://console.groq.com/keys",
+  },
+  {
+    id: "gemini",
+    label: "Google AI Studio",
+    placeholder: "Enter API key",
+    storeKey: "gemini_api_key",
+    getKeyUrl: "https://aistudio.google.com/apikey",
   },
   {
     id: "openai",
@@ -54,12 +61,6 @@ function ApiKeyInput({ config }: { config: ApiKeyConfig }) {
   const [isPrefilling, setIsPrefilling] = useState(false);
   const hasHydratedRef = useRef(false);
 
-  // Query to check if key is set
-  const { data: hasKey } = useQuery({
-    queryKey: ["apiKey", config.storeKey],
-    queryFn: () => tauriAPI.hasApiKey(config.storeKey),
-  });
-
   const { data: savedKeyValue } = useQuery({
     queryKey: ["apiKeyValue", config.storeKey],
     queryFn: () => tauriAPI.getApiKey(config.storeKey),
@@ -82,7 +83,6 @@ function ApiKeyInput({ config }: { config: ApiKeyConfig }) {
       await tauriAPI.setApiKey(config.storeKey, key);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["apiKey", config.storeKey] });
       queryClient.invalidateQueries({
         queryKey: ["apiKeyValue", config.storeKey],
       });
@@ -112,27 +112,21 @@ function ApiKeyInput({ config }: { config: ApiKeyConfig }) {
     <div className="settings-row api-keys-row">
       <div>
         <p className="settings-label">{config.label}</p>
-        <p className="settings-description">
-          {hasKey ? "API key configured" : "Enter your API key"}
-          {" · "}
-          <Anchor
+      </div>
+      <div className="settings-row-actions">
+        <Tooltip label="Get key" withArrow>
+          <ActionIcon
+            component="a"
             href={config.getKeyUrl}
             target="_blank"
             rel="noreferrer"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: "inherit",
-              lineHeight: "inherit",
-            }}
+            variant="subtle"
+            color="gray"
+            size={36}
           >
-            Get key
-            <LinkIcon size={12} />
-          </Anchor>
-        </p>
-      </div>
-      <div className="settings-row-actions">
+            <LinkIcon size={16} />
+          </ActionIcon>
+        </Tooltip>
         <PasswordInput
           value={value}
           onChange={(e) => setValue(e.currentTarget.value)}

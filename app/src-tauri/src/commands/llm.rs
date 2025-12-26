@@ -6,7 +6,7 @@ use crate::llm::{
 };
 use crate::llm::{
     format_text, AnthropicLlmProvider, GroqLlmProvider, LlmProvider, OllamaLlmProvider,
-    OpenAiLlmProvider,
+    OpenAiLlmProvider, GeminiLlmProvider,
 };
 use crate::pipeline::SharedPipeline;
 use std::sync::Arc;
@@ -64,7 +64,11 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             } else {
                 AnthropicLlmProvider::new(config.api_key.clone())
             };
-            Arc::new(provider.with_timeout(config.timeout))
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_thinking_budget(config.anthropic_thinking_budget),
+            )
         }
         "groq" => {
             let provider = if let Some(model) = &config.model {
@@ -73,6 +77,20 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
                 GroqLlmProvider::new(config.api_key.clone())
             };
             Arc::new(provider.with_timeout(config.timeout))
+        }
+        "gemini" => {
+            let provider = if let Some(model) = &config.model {
+                GeminiLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                GeminiLlmProvider::new(config.api_key.clone())
+            };
+
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_thinking_budget(config.gemini_thinking_budget)
+                    .with_thinking_level(config.gemini_thinking_level.clone()),
+            )
         }
         "ollama" => {
             let provider = OllamaLlmProvider::with_url(
@@ -91,7 +109,11 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
             } else {
                 OpenAiLlmProvider::new(config.api_key.clone())
             };
-            Arc::new(provider.with_timeout(config.timeout))
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_reasoning_effort(config.openai_reasoning_effort.clone()),
+            )
         }
     }
 }
@@ -104,7 +126,11 @@ fn create_llm_provider_without_timeout(config: &LlmConfig) -> Arc<dyn LlmProvide
             } else {
                 AnthropicLlmProvider::new(config.api_key.clone())
             };
-            Arc::new(provider.without_timeout())
+            Arc::new(
+                provider
+                    .without_timeout()
+                    .with_thinking_budget(config.anthropic_thinking_budget),
+            )
         }
         "groq" => {
             let provider = if let Some(model) = &config.model {
@@ -113,6 +139,20 @@ fn create_llm_provider_without_timeout(config: &LlmConfig) -> Arc<dyn LlmProvide
                 GroqLlmProvider::new(config.api_key.clone())
             };
             Arc::new(provider.without_timeout())
+        }
+        "gemini" => {
+            let provider = if let Some(model) = &config.model {
+                GeminiLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                GeminiLlmProvider::new(config.api_key.clone())
+            };
+
+            Arc::new(
+                provider
+                    .without_timeout()
+                    .with_thinking_budget(config.gemini_thinking_budget)
+                    .with_thinking_level(config.gemini_thinking_level.clone()),
+            )
         }
         "ollama" => {
             let provider = OllamaLlmProvider::with_url(
@@ -131,7 +171,11 @@ fn create_llm_provider_without_timeout(config: &LlmConfig) -> Arc<dyn LlmProvide
             } else {
                 OpenAiLlmProvider::new(config.api_key.clone())
             };
-            Arc::new(provider.without_timeout())
+            Arc::new(
+                provider
+                    .without_timeout()
+                    .with_reasoning_effort(config.openai_reasoning_effort.clone()),
+            )
         }
     }
 }
@@ -201,15 +245,36 @@ pub fn get_llm_providers() -> Vec<LlmProviderInfo> {
             id: "openai".to_string(),
             name: "OpenAI".to_string(),
             requires_api_key: true,
-            default_model: "gpt-4o-mini".to_string(),
+            default_model: "gpt-5".to_string(),
             models: vec![
+                "gpt-5.2".to_string(),
+                "gpt-5.1".to_string(),
+                "gpt-5".to_string(),
+                "gpt-5-mini".to_string(),
+                "gpt-5-nano".to_string(),
                 "gpt-4.1".to_string(),
                 "gpt-4.1-mini".to_string(),
                 "gpt-4.1-nano".to_string(),
+                // Older models kept for backwards compatibility.
                 "gpt-4o-mini".to_string(),
                 "gpt-4o".to_string(),
                 "gpt-4-turbo".to_string(),
                 "gpt-3.5-turbo".to_string(),
+            ],
+        },
+        LlmProviderInfo {
+            id: "gemini".to_string(),
+            name: "Google Gemini (AI Studio)".to_string(),
+            requires_api_key: true,
+            default_model: "gemini-2.5-flash".to_string(),
+            models: vec![
+                // Gemini 3 (preview) - uses full model path IDs
+                "models/gemini-3-pro-preview".to_string(),
+                "models/gemini-3-flash-preview".to_string(),
+                // Gemini 2.5 (stable)
+                "gemini-2.5-pro".to_string(),
+                "gemini-2.5-flash".to_string(),
+                "gemini-2.5-flash-lite".to_string(),
             ],
         },
         LlmProviderInfo {
@@ -225,6 +290,19 @@ pub fn get_llm_providers() -> Vec<LlmProviderInfo> {
                 "claude-3-sonnet-20240229".to_string(),
                 "claude-3-opus-20240229".to_string(),
                 "claude-3-5-sonnet-20241022".to_string(),
+            ],
+        },
+        LlmProviderInfo {
+            id: "groq".to_string(),
+            name: "Groq".to_string(),
+            requires_api_key: true,
+            default_model: "llama-3.3-70b-versatile".to_string(),
+            models: vec![
+                "llama-3.3-70b-versatile".to_string(),
+                "llama-3.1-8b-instant".to_string(),
+                "meta-llama/llama-guard-4-12b".to_string(),
+                "openai/gpt-oss-120b".to_string(),
+                "openai/gpt-oss-20b".to_string(),
             ],
         },
         LlmProviderInfo {
@@ -305,6 +383,10 @@ pub async fn test_llm_rewrite(
         api_key,
         model: desired_model,
         ollama_url: config.llm_config.ollama_url.clone(),
+        openai_reasoning_effort: config.llm_config.openai_reasoning_effort.clone(),
+        gemini_thinking_budget: config.llm_config.gemini_thinking_budget,
+        gemini_thinking_level: config.llm_config.gemini_thinking_level.clone(),
+        anthropic_thinking_budget: config.llm_config.anthropic_thinking_budget,
         prompts: PromptSections::default(),
         program_prompt_profiles: Vec::new(),
         timeout: config.llm_config.timeout,
@@ -363,6 +445,10 @@ pub async fn llm_complete(
         api_key,
         model: desired_model,
         ollama_url: config.llm_config.ollama_url.clone(),
+        openai_reasoning_effort: config.llm_config.openai_reasoning_effort.clone(),
+        gemini_thinking_budget: config.llm_config.gemini_thinking_budget,
+        gemini_thinking_level: config.llm_config.gemini_thinking_level.clone(),
+        anthropic_thinking_budget: config.llm_config.anthropic_thinking_budget,
         prompts: PromptSections::default(),
         program_prompt_profiles: Vec::new(),
         timeout: config.llm_config.timeout,
@@ -406,6 +492,10 @@ pub fn update_llm_config(
         api_key: config.api_key.unwrap_or_default(),
         model: config.model,
         ollama_url: config.ollama_url,
+        openai_reasoning_effort: None,
+        gemini_thinking_budget: None,
+        gemini_thinking_level: None,
+        anthropic_thinking_budget: None,
         prompts: PromptSections::default(),
         program_prompt_profiles: Vec::new(),
         timeout: Duration::from_secs(config.timeout_secs.unwrap_or(30)),
@@ -491,9 +581,11 @@ mod tests {
     #[test]
     fn test_get_llm_providers() {
         let providers = get_llm_providers();
-        assert_eq!(providers.len(), 3);
+        assert_eq!(providers.len(), 5);
         assert!(providers.iter().any(|p| p.id == "openai"));
+        assert!(providers.iter().any(|p| p.id == "gemini"));
         assert!(providers.iter().any(|p| p.id == "anthropic"));
+        assert!(providers.iter().any(|p| p.id == "groq"));
         assert!(providers.iter().any(|p| p.id == "ollama"));
     }
 

@@ -114,6 +114,14 @@ export type RequestLogsRetentionMode = "amount" | "time";
 
 export type SettingsGuideState = "pending" | "skipped" | "completed";
 
+export type OpenAiReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+
 function normalizeOutputMode(value: unknown): OutputMode {
   if (
     value === "paste" ||
@@ -149,6 +157,14 @@ export interface AppSettings {
   stt_transcription_prompt: string | null;
   llm_provider: string | null;
   llm_model: string | null;
+
+  // Optional per-provider reasoning/thinking knobs.
+  // These are ignored unless the selected provider/model supports them.
+  openai_reasoning_effort: OpenAiReasoningEffort | null;
+  anthropic_thinking_budget: number | null;
+  gemini_thinking_budget: number | null;
+  gemini_thinking_level: "minimal" | "low" | "medium" | "high" | null;
+
   playing_audio_handling: PlayingAudioHandling;
   stt_timeout_seconds: number | null;
   overlay_mode: OverlayMode;
@@ -161,9 +177,18 @@ export interface AppSettings {
   quiet_audio_min_duration_secs: number;
   quiet_audio_rms_dbfs_threshold: number;
   quiet_audio_peak_dbfs_threshold: number;
+  // Extra protection: if enabled, also require that VAD detects speech.
+  quiet_audio_require_speech: boolean;
 
-  // Experimental: noise gate (0 = off, 100 = strongest)
-  noise_gate_strength: number;
+  // Experimental: noise gate threshold (dBFS). null means off.
+  noise_gate_threshold_dbfs: number | null;
+
+  // Voice pickup (stop-time preprocessing)
+  audio_downmix_to_mono: boolean;
+  audio_resample_to_16khz: boolean;
+  audio_highpass_enabled: boolean;
+  audio_agc_enabled: boolean;
+  audio_noise_suppression_enabled: boolean;
 
   // How many recordings/history entries to retain
   max_saved_recordings: number;
@@ -222,6 +247,78 @@ function normalizeNoiseGateStrength(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   const rounded = Math.round(value);
   return Math.min(100, Math.max(0, rounded));
+}
+
+function normalizeOpenAiReasoningEffort(
+  value: unknown
+): OpenAiReasoningEffort | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (
+    v === "none" ||
+    v === "minimal" ||
+    v === "low" ||
+    v === "medium" ||
+    v === "high" ||
+    v === "xhigh"
+  ) {
+    return v;
+  }
+  return null;
+}
+
+function normalizeGeminiThinkingLevel(
+  value: unknown
+): "minimal" | "low" | "medium" | "high" | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (v === "minimal" || v === "low" || v === "medium" || v === "high")
+    return v;
+  return null;
+}
+
+function normalizeGeminiThinkingBudget(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  // Keep it integer-ish (Gemini expects an integer token budget).
+  return Math.trunc(value);
+}
+
+function normalizeAnthropicThinkingBudget(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  // Keep it integer-ish; Anthropic expects an integer token budget.
+  const n = Math.trunc(value);
+  // The cookbook notes a minimum budget of 1024 for extended thinking.
+  if (n < 1024) return 1024;
+  // Defensive cap; actual max varies by model.
+  return Math.min(32768, n);
+}
+
+function normalizeNoiseGateThresholdDbfs(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  // Clamp to the UI range.
+  return Math.min(-30, Math.max(-75, value));
+}
+
+function noiseGateStrengthToThresholdDbfs(strength: number): number | null {
+  const s = normalizeNoiseGateStrength(strength);
+  if (s <= 0) return null;
+  // Map 1..100 => -75..-30 (same range as the Rust mapping).
+  const t = -75 + (s / 100) * 45;
+  return Math.min(-30, Math.max(-75, t));
+}
+
+function noiseGateThresholdDbfsToStrength(
+  thresholdDbfs: number | null
+): number {
+  if (thresholdDbfs == null) return 0;
+  const t = normalizeNoiseGateThresholdDbfs(thresholdDbfs);
+  if (t == null) return 0;
+  const s = ((t + 75) / 45) * 100;
+  // Never return 0 when enabled; old UI treated 0 as off.
+  return Math.min(100, Math.max(1, Math.round(s)));
 }
 
 function normalizeMaxSavedRecordings(value: unknown): number {
@@ -600,6 +697,18 @@ export const tauriAPI = {
         (await store.get<string | null>("stt_transcription_prompt")) ?? null,
       llm_provider: (await store.get<string | null>("llm_provider")) ?? null,
       llm_model: (await store.get<string | null>("llm_model")) ?? null,
+      openai_reasoning_effort: normalizeOpenAiReasoningEffort(
+        await store.get("openai_reasoning_effort")
+      ),
+      anthropic_thinking_budget: normalizeAnthropicThinkingBudget(
+        await store.get("anthropic_thinking_budget")
+      ),
+      gemini_thinking_budget: normalizeGeminiThinkingBudget(
+        await store.get("gemini_thinking_budget")
+      ),
+      gemini_thinking_level: normalizeGeminiThinkingLevel(
+        await store.get("gemini_thinking_level")
+      ),
       playing_audio_handling: normalizePlayingAudioHandling(
         (await store.get("playing_audio_handling")) ??
           // Legacy key for migration:
@@ -624,10 +733,32 @@ export const tauriAPI = {
         (await store.get<number>("quiet_audio_rms_dbfs_threshold")) ?? -60,
       quiet_audio_peak_dbfs_threshold:
         (await store.get<number>("quiet_audio_peak_dbfs_threshold")) ?? -50,
+      quiet_audio_require_speech:
+        (await store.get<boolean>("quiet_audio_require_speech")) ?? false,
 
-      noise_gate_strength: normalizeNoiseGateStrength(
-        await store.get("noise_gate_strength")
-      ),
+      noise_gate_threshold_dbfs: await(async () => {
+        const configured = normalizeNoiseGateThresholdDbfs(
+          await store.get("noise_gate_threshold_dbfs")
+        );
+        if (configured != null) return configured;
+
+        // Legacy fallback
+        const legacyStrength = normalizeNoiseGateStrength(
+          await store.get("noise_gate_strength")
+        );
+        return noiseGateStrengthToThresholdDbfs(legacyStrength);
+      })(),
+
+      audio_downmix_to_mono:
+        (await store.get<boolean>("audio_downmix_to_mono")) ?? true,
+      audio_resample_to_16khz:
+        (await store.get<boolean>("audio_resample_to_16khz")) ?? false,
+      audio_highpass_enabled:
+        (await store.get<boolean>("audio_highpass_enabled")) ?? true,
+      audio_agc_enabled:
+        (await store.get<boolean>("audio_agc_enabled")) ?? false,
+      audio_noise_suppression_enabled:
+        (await store.get<boolean>("audio_noise_suppression_enabled")) ?? false,
 
       max_saved_recordings: normalizeMaxSavedRecordings(
         await store.get("max_saved_recordings")
@@ -803,6 +934,62 @@ export const tauriAPI = {
     await store.save();
   },
 
+  async updateOpenAiReasoningEffort(
+    effort: OpenAiReasoningEffort | null
+  ): Promise<void> {
+    const store = await getStore();
+    if (effort == null) {
+      await store.delete("openai_reasoning_effort");
+    } else {
+      await store.set(
+        "openai_reasoning_effort",
+        normalizeOpenAiReasoningEffort(effort)
+      );
+    }
+    await store.save();
+  },
+
+  async updateAnthropicThinkingBudget(budget: number | null): Promise<void> {
+    const store = await getStore();
+    if (budget == null) {
+      await store.delete("anthropic_thinking_budget");
+    } else {
+      await store.set(
+        "anthropic_thinking_budget",
+        normalizeAnthropicThinkingBudget(budget)
+      );
+    }
+    await store.save();
+  },
+
+  async updateGeminiThinkingBudget(budget: number | null): Promise<void> {
+    const store = await getStore();
+    if (budget == null) {
+      await store.delete("gemini_thinking_budget");
+    } else {
+      await store.set(
+        "gemini_thinking_budget",
+        normalizeGeminiThinkingBudget(budget)
+      );
+    }
+    await store.save();
+  },
+
+  async updateGeminiThinkingLevel(
+    level: "minimal" | "low" | "medium" | "high" | null
+  ): Promise<void> {
+    const store = await getStore();
+    if (level == null) {
+      await store.delete("gemini_thinking_level");
+    } else {
+      await store.set(
+        "gemini_thinking_level",
+        normalizeGeminiThinkingLevel(level)
+      );
+    }
+    await store.save();
+  },
+
   async updatePlayingAudioHandling(
     handling: PlayingAudioHandling
   ): Promise<void> {
@@ -875,12 +1062,65 @@ export const tauriAPI = {
     await store.save();
   },
 
-  async updateNoiseGateStrength(strength: number): Promise<void> {
+  async updateQuietAudioRequireSpeech(enabled: boolean): Promise<void> {
     const store = await getStore();
+    await store.set("quiet_audio_require_speech", enabled);
+    await store.save();
+  },
+
+  async updateNoiseGateThresholdDbfs(
+    thresholdDbfs: number | null
+  ): Promise<void> {
+    const store = await getStore();
+    const normalized = normalizeNoiseGateThresholdDbfs(thresholdDbfs);
+    await store.set("noise_gate_threshold_dbfs", normalized);
+    // Best-effort legacy key for downgrade compatibility.
     await store.set(
       "noise_gate_strength",
-      normalizeNoiseGateStrength(strength)
+      noiseGateThresholdDbfsToStrength(normalized)
     );
+    await store.save();
+  },
+
+  async updateNoiseGateStrength(strength: number): Promise<void> {
+    const store = await getStore();
+    const normalizedStrength = normalizeNoiseGateStrength(strength);
+    await store.set("noise_gate_strength", normalizedStrength);
+    // Keep the new key in sync for newer builds.
+    await store.set(
+      "noise_gate_threshold_dbfs",
+      noiseGateStrengthToThresholdDbfs(normalizedStrength)
+    );
+    await store.save();
+  },
+
+  async updateAudioDownmixToMono(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("audio_downmix_to_mono", enabled);
+    await store.save();
+  },
+
+  async updateAudioResampleTo16khz(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("audio_resample_to_16khz", enabled);
+    await store.save();
+  },
+
+  async updateAudioHighpassEnabled(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("audio_highpass_enabled", enabled);
+    await store.save();
+  },
+
+  async updateAudioAgcEnabled(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("audio_agc_enabled", enabled);
+    await store.save();
+  },
+
+  async updateAudioNoiseSuppressionEnabled(enabled: boolean): Promise<void> {
+    const store = await getStore();
+    await store.set("audio_noise_suppression_enabled", enabled);
     await store.save();
   },
 
@@ -1146,12 +1386,40 @@ export const sttAPI = {
 
   hasLastAudio: () => invoke<boolean>("pipeline_has_last_audio"),
 
+  getLastRecordingDiagnostics: () =>
+    invoke<AudioCaptureDiagnostics | null>(
+      "pipeline_get_last_recording_diagnostics"
+    ),
+
   // Retry a previous request using its persisted audio.
   // Returns the final text (STT + optional LLM), same as normal transcription.
   retryTranscription: (params: { requestId: string }) =>
     invoke<string>("pipeline_retry_transcription", {
       requestId: params.requestId,
     }),
+};
+
+export interface AudioLevelStats {
+  duration_secs: number;
+  rms: number;
+  peak: number;
+}
+
+export interface AudioCaptureDiagnostics {
+  stats: AudioLevelStats;
+  // null when speech detection wasn't computed for the last recording.
+  speech_detected: boolean | null;
+}
+
+export interface AudioSettingsTestWavs {
+  raw_wav_base64: string;
+  processed_wav_base64: string;
+}
+
+export const audioSettingsTestAPI = {
+  startRecording: () => invoke<void>("pipeline_test_audio_settings_start_recording"),
+  stopRecording: () =>
+    invoke<AudioSettingsTestWavs>("pipeline_test_audio_settings_stop_recording"),
 };
 
 // ============================================================================

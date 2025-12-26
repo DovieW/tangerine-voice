@@ -16,6 +16,7 @@ pub struct OpenAiLlmProvider {
     api_key: String,
     model: String,
     timeout: Option<Duration>,
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiLlmProvider {
@@ -26,6 +27,7 @@ impl OpenAiLlmProvider {
             api_key,
             model: DEFAULT_MODEL.to_string(),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            reasoning_effort: None,
         }
     }
 
@@ -36,6 +38,7 @@ impl OpenAiLlmProvider {
             api_key,
             model,
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            reasoning_effort: None,
         }
     }
 
@@ -47,6 +50,7 @@ impl OpenAiLlmProvider {
             api_key,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
+            reasoning_effort: None,
         }
     }
 
@@ -64,12 +68,91 @@ impl OpenAiLlmProvider {
         self
     }
 
+    /// Configure OpenAI reasoning effort (reasoning models only).
+    ///
+    /// Docs (2025-12): supported values vary by model family and include
+    /// "none", "minimal", "low", "medium", "high", "xhigh".
+    /// We validate per-model and ignore unsupported values to avoid 400s.
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
     fn supports_structured_outputs(model: &str) -> bool {
-        // GPT-4.1 family supports Structured Outputs; using it for rewrite makes outputs
-        // deterministic and easier to parse.
+        // Structured Outputs (schema adherence) is available in newer models.
+        // We keep a conservative allowlist to avoid 400s on unsupported models.
         //
         // Docs: https://platform.openai.com/docs/guides/structured-outputs
-        model.starts_with("gpt-4.1")
+        model.starts_with("gpt-4.1") || model.starts_with("gpt-4o") || model.starts_with("gpt-5")
+    }
+
+    fn supports_reasoning_effort(model: &str) -> bool {
+        // OpenAI docs: "gpt-5 and o-series models only".
+        // We treat any model starting with "o" as o-series.
+        model.starts_with("gpt-5") || model.starts_with('o')
+    }
+
+    fn allowed_reasoning_efforts(model: &str) -> &'static [&'static str] {
+        // From OpenAI API docs:
+        // - gpt-5.1 supports: none, low, medium, high
+        // - models before gpt-5.1 do not support `none`
+        // We keep this conservative so users don't hit 400s.
+        if model.starts_with("gpt-5.1") || model.starts_with("gpt-5.2") {
+            &["none", "low", "medium", "high"]
+        } else if model.starts_with("gpt-5") {
+            &["low", "medium", "high"]
+        } else if model.starts_with('o') {
+            // o-series details vary; keep conservative.
+            &["low", "medium", "high"]
+        } else {
+            &[]
+        }
+    }
+
+    fn validated_reasoning_effort(&self) -> Option<String> {
+        let raw = self.reasoning_effort.as_deref()?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+
+        let lower = raw.to_ascii_lowercase();
+        if !Self::supports_reasoning_effort(&self.model) {
+            return None;
+        }
+
+        let allowed = Self::allowed_reasoning_efforts(&self.model);
+        if allowed.iter().any(|a| *a == lower.as_str()) {
+            return Some(lower);
+        }
+
+        log::warn!(
+            "OpenAI reasoning effort '{}' not supported for model '{}'; ignoring",
+            lower,
+            self.model
+        );
+        None
+    }
+
+    fn supports_temperature_param(model: &str, reasoning_effort: Option<&str>) -> bool {
+        // Docs (GPT-5.2 parameter compatibility):
+        // - temperature/top_p/logprobs only supported when reasoning effort is `none`
+        //   for gpt-5.2 and gpt-5.1
+        // - older GPT-5 models error if these fields are included at all
+        if model.starts_with("gpt-5.1") || model.starts_with("gpt-5.2") {
+            let effective = reasoning_effort.unwrap_or("none");
+            return effective == "none";
+        }
+
+        if model.starts_with("gpt-5") {
+            return false;
+        }
+
+        if model.starts_with('o') {
+            // Conservative default for o-series.
+            return false;
+        }
+
+        true
     }
 
     fn rewrite_response_format() -> TextFormat {
@@ -156,9 +239,17 @@ struct ResponsesRequest {
     model: String,
     input: Vec<ResponseInputMessage>,
     max_output_tokens: u32,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<TextConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReasoningConfig {
+    effort: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -217,6 +308,12 @@ impl LlmProvider for OpenAiLlmProvider {
             system_prompt.to_string()
         };
 
+        let reasoning_effort = if Self::supports_reasoning_effort(&self.model) {
+            self.validated_reasoning_effort()
+        } else {
+            None
+        };
+
         let request = ResponsesRequest {
             model: self.model.clone(),
             input: vec![
@@ -230,7 +327,11 @@ impl LlmProvider for OpenAiLlmProvider {
                 },
             ],
             max_output_tokens: 4096,
-            temperature: 0.0, // Deterministic formatting/rewrite
+            reasoning: reasoning_effort
+                .clone()
+                .map(|effort| ReasoningConfig { effort }),
+            temperature: Self::supports_temperature_param(&self.model, reasoning_effort.as_deref())
+                .then_some(0.0),
             text: use_structured_outputs.then(|| TextConfig {
                 format: Some(Self::rewrite_response_format()),
             }),
