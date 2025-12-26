@@ -19,6 +19,7 @@ pub struct GeminiLlmProvider {
     timeout: Option<Duration>,
     thinking_budget: Option<i64>,
     thinking_level: Option<String>,
+    structured_outputs: bool,
     request_log_store: Option<RequestLogStore>,
 }
 
@@ -31,6 +32,7 @@ impl GeminiLlmProvider {
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             thinking_budget: None,
             thinking_level: None,
+            structured_outputs: true,
             request_log_store: None,
         }
     }
@@ -43,8 +45,19 @@ impl GeminiLlmProvider {
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             thinking_budget: None,
             thinking_level: None,
+            structured_outputs: true,
             request_log_store: None,
         }
+    }
+
+    /// Enable/disable Structured Outputs (JSON schema mode).
+    ///
+    /// This provider defaults to **enabled** because it improves determinism for transcript
+    /// rewrite formatting. For ad-hoc completions (like transcript analysis), callers should
+    /// disable it so the model can return free-form text.
+    pub fn with_structured_outputs(mut self, enabled: bool) -> Self {
+        self.structured_outputs = enabled;
+        self
     }
 
     pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
@@ -328,8 +341,16 @@ impl LlmProvider for GeminiLlmProvider {
         let generation_config = GenerationConfig {
             max_output_tokens: 4096,
             temperature,
-            response_mime_type: "application/json".to_string(),
-            response_json_schema: Some(Self::rewrite_response_schema()),
+            response_mime_type: if self.structured_outputs {
+                "application/json".to_string()
+            } else {
+                "text/plain".to_string()
+            },
+            response_json_schema: if self.structured_outputs {
+                Some(Self::rewrite_response_schema())
+            } else {
+                None
+            },
             thinking_config: self.effective_thinking_config(),
         };
 
@@ -337,10 +358,14 @@ impl LlmProvider for GeminiLlmProvider {
             system_instruction: Some(Content {
                 role: None,
                 parts: vec![Part {
-                    text: Some(format!(
-                        "{}\n\nReturn ONLY valid JSON that matches the provided JSON Schema (no markdown, no extra keys).",
-                        system_prompt
-                    )),
+                    text: Some(if self.structured_outputs {
+                        format!(
+                            "{}\n\nReturn ONLY valid JSON that matches the provided JSON Schema (no markdown, no extra keys).",
+                            system_prompt
+                        )
+                    } else {
+                        system_prompt.to_string()
+                    }),
                 }],
             }),
             contents: vec![Content {
@@ -416,6 +441,10 @@ impl LlmProvider for GeminiLlmProvider {
             .map_err(|e| LlmError::InvalidResponse(format!("Failed to parse Gemini response: {}", e)))?;
 
         let output_text = Self::extract_text(&response_json)?;
+
+        if !self.structured_outputs {
+            return Ok(output_text);
+        }
 
         // Response is JSON-mode; unwrap our schema.
         let v: serde_json::Value = serde_json::from_str(&output_text).map_err(|e| {

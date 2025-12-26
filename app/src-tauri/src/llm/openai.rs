@@ -18,6 +18,7 @@ pub struct OpenAiLlmProvider {
     model: String,
     timeout: Option<Duration>,
     reasoning_effort: Option<String>,
+    structured_outputs: bool,
     request_log_store: Option<RequestLogStore>,
 }
 
@@ -30,6 +31,7 @@ impl OpenAiLlmProvider {
             model: DEFAULT_MODEL.to_string(),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             reasoning_effort: None,
+            structured_outputs: true,
             request_log_store: None,
         }
     }
@@ -42,6 +44,7 @@ impl OpenAiLlmProvider {
             model,
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             reasoning_effort: None,
+            structured_outputs: true,
             request_log_store: None,
         }
     }
@@ -55,8 +58,19 @@ impl OpenAiLlmProvider {
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             timeout: Some(DEFAULT_LLM_TIMEOUT),
             reasoning_effort: None,
+            structured_outputs: true,
             request_log_store: None,
         }
+    }
+
+    /// Enable/disable Structured Outputs (JSON schema mode).
+    ///
+    /// This provider defaults to **enabled** because it dramatically improves determinism
+    /// for rewrite formatting. For ad-hoc completions (like transcript analysis), callers
+    /// should disable it so the model can return free-form text.
+    pub fn with_structured_outputs(mut self, enabled: bool) -> Self {
+        self.structured_outputs = enabled;
+        self
     }
 
     pub fn with_request_log_store(mut self, store: Option<RequestLogStore>) -> Self {
@@ -305,7 +319,8 @@ impl LlmProvider for OpenAiLlmProvider {
             return Err(LlmError::NoApiKey("openai".to_string()));
         }
 
-        let use_structured_outputs = Self::supports_structured_outputs(&self.model);
+        let use_structured_outputs =
+            self.structured_outputs && Self::supports_structured_outputs(&self.model);
 
         // When using Structured Outputs, a short explicit instruction helps avoid
         // accidental prose even though the schema is enforced server-side.

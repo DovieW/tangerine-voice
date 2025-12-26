@@ -1370,10 +1370,15 @@ export const llmAPI = {
     userPrompt: string;
   }) =>
     invoke<LlmCompleteResponse>("llm_complete", {
-      provider: params.provider,
-      model: params.model ?? null,
-      system_prompt: params.systemPrompt,
-      user_prompt: params.userPrompt,
+      // Rust signature: llm_complete(pipeline, args: LlmCompleteArgs)
+      args: {
+        provider: params.provider,
+        model: params.model ?? null,
+
+        // The backend accepts both camelCase and snake_case via serde aliases.
+        systemPrompt: params.systemPrompt,
+        userPrompt: params.userPrompt,
+      },
     }),
 };
 

@@ -56,6 +56,18 @@ pub struct LlmCompleteResponse {
     pub model_used: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct LlmCompleteArgs {
+    pub provider: String,
+    pub model: Option<String>,
+
+    // Historical/UI naming: accept both camelCase and snake_case.
+    #[serde(alias = "systemPrompt")]
+    pub system_prompt: String,
+    #[serde(alias = "userPrompt")]
+    pub user_prompt: String,
+}
+
 fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
     match config.provider.as_str() {
         "anthropic" => {
@@ -113,6 +125,73 @@ fn create_llm_provider(config: &LlmConfig) -> Arc<dyn LlmProvider> {
                 provider
                     .with_timeout(config.timeout)
                     .with_reasoning_effort(config.openai_reasoning_effort.clone()),
+            )
+        }
+    }
+}
+
+fn create_llm_provider_unstructured(config: &LlmConfig) -> Arc<dyn LlmProvider> {
+    // IMPORTANT:
+    // This is used for one-off ad-hoc completions (e.g. History "Analyze transcripts" → "Send to LLM").
+    // We intentionally disable rewrite-oriented structured outputs so the model can return free-form text.
+    match config.provider.as_str() {
+        "anthropic" => {
+            let provider = if let Some(model) = &config.model {
+                AnthropicLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                AnthropicLlmProvider::new(config.api_key.clone())
+            };
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_thinking_budget(config.anthropic_thinking_budget),
+            )
+        }
+        "groq" => {
+            let provider = if let Some(model) = &config.model {
+                GroqLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                GroqLlmProvider::new(config.api_key.clone())
+            };
+            Arc::new(provider.with_timeout(config.timeout))
+        }
+        "gemini" => {
+            let provider = if let Some(model) = &config.model {
+                GeminiLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                GeminiLlmProvider::new(config.api_key.clone())
+            };
+
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_thinking_budget(config.gemini_thinking_budget)
+                    .with_thinking_level(config.gemini_thinking_level.clone())
+                    .with_structured_outputs(false),
+            )
+        }
+        "ollama" => {
+            let provider = OllamaLlmProvider::with_url(
+                config
+                    .ollama_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                config.model.clone(),
+            );
+            Arc::new(provider.with_timeout(config.timeout))
+        }
+        _ => {
+            // Default to OpenAI
+            let provider = if let Some(model) = &config.model {
+                OpenAiLlmProvider::with_model(config.api_key.clone(), model.clone())
+            } else {
+                OpenAiLlmProvider::new(config.api_key.clone())
+            };
+            Arc::new(
+                provider
+                    .with_timeout(config.timeout)
+                    .with_reasoning_effort(config.openai_reasoning_effort.clone())
+                    .with_structured_outputs(false),
             )
         }
     }
@@ -264,7 +343,7 @@ pub fn get_llm_providers() -> Vec<LlmProviderInfo> {
         },
         LlmProviderInfo {
             id: "gemini".to_string(),
-            name: "Google Gemini (AI Studio)".to_string(),
+            name: "Google AI Studio".to_string(),
             requires_api_key: true,
             default_model: "gemini-2.5-flash".to_string(),
             models: vec![
@@ -412,15 +491,12 @@ pub async fn test_llm_rewrite(
 #[tauri::command]
 pub async fn llm_complete(
     pipeline: State<'_, SharedPipeline>,
-    provider: String,
-    model: Option<String>,
-    system_prompt: String,
-    user_prompt: String,
+    args: LlmCompleteArgs,
 ) -> Result<LlmCompleteResponse, LlmCommandError> {
     let config = pipeline.config();
 
-    let desired_provider = provider;
-    let desired_model = model;
+    let desired_provider = args.provider;
+    let desired_model = args.model;
 
     let api_key = if desired_provider == "ollama" {
         String::new()
@@ -454,9 +530,9 @@ pub async fn llm_complete(
         timeout: config.llm_config.timeout,
     };
 
-    let provider = create_llm_provider(&provider_cfg);
+    let provider = create_llm_provider_unstructured(&provider_cfg);
     let output = provider
-        .complete(system_prompt.as_str(), user_prompt.as_str())
+        .complete(args.system_prompt.as_str(), args.user_prompt.as_str())
         .await
         .map_err(|e| LlmCommandError::from(e.to_string()))?;
 
